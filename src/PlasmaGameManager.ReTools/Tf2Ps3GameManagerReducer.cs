@@ -35,7 +35,7 @@ public static partial class Tf2Ps3GameManagerReducer
             {
                 status = "seeded-from-analyzed-tf2ps3-ghidra-evidence",
                 note = "Focused PS3 Ghidra output now maps the TF2 PS3 GameManager listen, roster, join-mesh, peer-mesh, AddAssociations, and FeslThread-adjacent paths. Entries marked pointer-table-evidence still need a handler entry point recovered from xrefs or jumptables before they are implementation-complete.",
-                requiredScriptPath = "/home/deck/Documents/Decomp projects/Projects/Ps3GhidraScripts/",
+                requiredScriptPath = ".local/input/Ps3GhidraScripts/",
                 ghidraWorkflow = new[]
                 {
                     "Import as PowerPC:BE:64:A2ALT-32addr.",

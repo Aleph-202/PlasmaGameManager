@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PlasmaGameManager.Protocol\PlasmaGameManager.Protocol.csproj" />
+    <ProjectReference Include="..\PlasmaGameManager.Server\PlasmaGameManager.Server.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

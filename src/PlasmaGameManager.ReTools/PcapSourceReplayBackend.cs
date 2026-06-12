@@ -19,10 +19,11 @@ public sealed class PcapSourceReplayBackend
         int clientSearchWindow = 0,
         PcapSourceReplayPacingMode pacingMode = PcapSourceReplayPacingMode.None,
         int maxReplayDelayMilliseconds = 250,
-        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet)
+        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet,
+        string? preferredScript = null)
     {
-        var scripts = LoadReplayScripts(pcapPath);
-        await RunAsync(scripts, bindAddress, port, ct, evidenceWriter, matchMode, clientSearchWindow, pacingMode, maxReplayDelayMilliseconds, backendMode);
+        var scripts = LoadReplayScripts(pcapPath, preferredScript);
+        await RunAsync(scripts, bindAddress, port, ct, evidenceWriter, matchMode, clientSearchWindow, pacingMode, maxReplayDelayMilliseconds, backendMode, preferredScript);
     }
 
     public async Task RunAsync(
@@ -35,10 +36,11 @@ public sealed class PcapSourceReplayBackend
         int clientSearchWindow = 0,
         PcapSourceReplayPacingMode pacingMode = PcapSourceReplayPacingMode.None,
         int maxReplayDelayMilliseconds = 250,
-        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet)
+        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet,
+        string? preferredScript = null)
     {
         var script = new PcapSourceReplayScript("inline-script", steps.ToArray());
-        await RunAsync([script], bindAddress, port, ct, evidenceWriter, matchMode, clientSearchWindow, pacingMode, maxReplayDelayMilliseconds, backendMode);
+        await RunAsync([script], bindAddress, port, ct, evidenceWriter, matchMode, clientSearchWindow, pacingMode, maxReplayDelayMilliseconds, backendMode, preferredScript);
     }
 
     public async Task RunAsync(
@@ -51,13 +53,14 @@ public sealed class PcapSourceReplayBackend
         int clientSearchWindow = 0,
         PcapSourceReplayPacingMode pacingMode = PcapSourceReplayPacingMode.None,
         int maxReplayDelayMilliseconds = 250,
-        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet)
+        PcapSourceReplayBackendMode backendMode = PcapSourceReplayBackendMode.Packet,
+        string? preferredScript = null)
     {
         using var socket = new UdpClient(new IPEndPoint(bindAddress, port));
         var drivers = new Dictionary<string, Ps3SourceGameplayReplayDriver>(StringComparer.Ordinal);
         var turnDrivers = new Dictionary<string, Ps3SourceGameplayTurnReplayDriver>(StringComparer.Ordinal);
         var driverScripts = new Dictionary<string, string>(StringComparer.Ordinal);
-        var sessions = new Dictionary<string, Ps3SourceGameplaySession>(StringComparer.Ordinal);
+        var sessions = new Dictionary<string, PcapSourceReplayBackendSession>(StringComparer.Ordinal);
         var scriptSet = scripts.Where(static script => script.Steps.Length > 0).ToArray();
         if (scriptSet.Length == 0)
         {
@@ -65,7 +68,7 @@ public sealed class PcapSourceReplayBackend
         }
 
         maxReplayDelayMilliseconds = Math.Max(0, maxReplayDelayMilliseconds);
-        Console.WriteLine($"PCAP Source replay backend listening on {bindAddress}:{port} scripts={scriptSet.Length} packets={scriptSet.Sum(static script => script.Steps.Length)} backendMode={backendMode} matchMode={matchMode} clientSearchWindow={clientSearchWindow} pacingMode={pacingMode} maxReplayDelayMs={maxReplayDelayMilliseconds}");
+        Console.WriteLine($"PCAP Source replay backend listening on {bindAddress}:{port} scripts={scriptSet.Length} packets={scriptSet.Sum(static script => script.Steps.Length)} backendMode={backendMode} matchMode={matchMode} clientSearchWindow={clientSearchWindow} pacingMode={pacingMode} maxReplayDelayMs={maxReplayDelayMilliseconds} preferredScript={preferredScript ?? ""}");
         while (!ct.IsCancellationRequested)
         {
             UdpReceiveResult received;
@@ -81,11 +84,16 @@ public sealed class PcapSourceReplayBackend
             var endpoint = received.RemoteEndPoint.ToString();
             if (!sessions.TryGetValue(endpoint, out var session))
             {
-                session = new Ps3SourceGameplaySession();
+                session = new PcapSourceReplayBackendSession();
                 sessions.Add(endpoint, session);
             }
 
-            var clientObservation = session.Observe(Ps3SourceGameplayDirection.ClientToServer, received.Buffer);
+            var receiveTimestamp = DateTimeOffset.UtcNow;
+            var clientObservation = session.Gameplay.Observe(Ps3SourceGameplayDirection.ClientToServer, received.Buffer);
+            var clientSemantic = AnalyzePayload(
+                received.Buffer,
+                clientObservation.Direction == Ps3SourceGameplayDirection.ClientToServer
+                && clientObservation.DirectionPacketCount == 1);
             var selection = SelectReplayDriver(
                 endpoint,
                 received.Buffer,
@@ -97,10 +105,11 @@ public sealed class PcapSourceReplayBackend
                 clientSearchWindow,
                 backendMode);
             var result = selection.Result;
+            var receivePhase = session.Phase.Observe(receiveTimestamp, result.MatchedClientTimestampMicroseconds);
             WriteEvidence(
                 evidenceWriter,
                 new PcapSourceReplayBackendEvent(
-                    DateTimeOffset.UtcNow,
+                    receiveTimestamp,
                     "source-replay-receive",
                     endpoint,
                     received.Buffer.Length,
@@ -124,8 +133,18 @@ public sealed class PcapSourceReplayBackend
                     clientObservation.BodyLength == 0 ? null : clientObservation.BodyLength,
                     clientObservation.SequenceDeltaFromPreviousSameDirection,
                     clientObservation.Shape.ToString(),
+                    clientSemantic.Kind,
+                    clientSemantic.Role,
+                    clientSemantic.EmbeddedRecordRoles,
+                    clientSemantic.EmbeddedObjectIds,
+                    clientSemantic.EmbeddedClassIds,
+                    clientSemantic.EmbeddedObjectLinks,
+                    clientSemantic.EmbeddedDisplayNames,
                     clientObservation.DirectionPacketCount,
                     clientObservation.SequenceDecrease,
+                    receivePhase.Label,
+                    receivePhase.PacketCount,
+                    receivePhase.ElapsedMilliseconds,
                     null));
             Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} <= {endpoint} replay script={selection.ScriptName} matched={result.Matched} responses={result.ServerResponses.Length} cursor={result.Cursor} {result.Explanation}");
             if (!result.Matched)
@@ -143,11 +162,14 @@ public sealed class PcapSourceReplayBackend
                 }
 
                 await socket.SendAsync(response.Payload, response.Payload.Length, received.RemoteEndPoint);
-                var serverObservation = session.Observe(Ps3SourceGameplayDirection.ServerToClient, response.Payload);
+                var sendTimestamp = DateTimeOffset.UtcNow;
+                var serverObservation = session.Gameplay.Observe(Ps3SourceGameplayDirection.ServerToClient, response.Payload);
+                var serverSemantic = AnalyzePayload(response.Payload, false);
+                var sendPhase = session.Phase.Observe(sendTimestamp, response.TimestampMicroseconds);
                 WriteEvidence(
                     evidenceWriter,
                     new PcapSourceReplayBackendEvent(
-                        DateTimeOffset.UtcNow,
+                        sendTimestamp,
                         "source-replay-send",
                         endpoint,
                         response.Payload.Length,
@@ -171,8 +193,18 @@ public sealed class PcapSourceReplayBackend
                         serverObservation.BodyLength == 0 ? null : serverObservation.BodyLength,
                         serverObservation.SequenceDeltaFromPreviousSameDirection,
                         serverObservation.Shape.ToString(),
+                        serverSemantic.Kind,
+                        serverSemantic.Role,
+                        serverSemantic.EmbeddedRecordRoles,
+                        serverSemantic.EmbeddedObjectIds,
+                        serverSemantic.EmbeddedClassIds,
+                        serverSemantic.EmbeddedObjectLinks,
+                        serverSemantic.EmbeddedDisplayNames,
                         serverObservation.DirectionPacketCount,
                         serverObservation.SequenceDecrease,
+                        sendPhase.Label,
+                        sendPhase.PacketCount,
+                        sendPhase.ElapsedMilliseconds,
                         replayDelay.TotalMilliseconds == 0 ? null : replayDelay.TotalMilliseconds));
                 Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} => {endpoint} replay script={selection.ScriptName} packetIndex={response.PacketIndex} len={response.Payload.Length} delayMs={replayDelay.TotalMilliseconds:0.###}");
                 previousReplayTimestamp = response.TimestampMicroseconds;
@@ -180,7 +212,7 @@ public sealed class PcapSourceReplayBackend
         }
     }
 
-    private PcapSourceReplayScript[] LoadReplayScripts(string path)
+    private PcapSourceReplayScript[] LoadReplayScripts(string path, string? preferredScript)
     {
         if (File.Exists(path))
         {
@@ -212,6 +244,14 @@ public sealed class PcapSourceReplayBackend
         if (scripts.Length == 0)
         {
             throw new InvalidOperationException($"No active Source/gameplay replay flows were found under {path}.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(preferredScript))
+        {
+            scripts = scripts
+                .OrderByDescending(script => script.Name.Contains(preferredScript, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(static script => script.Name, StringComparer.Ordinal)
+                .ToArray();
         }
 
         return scripts;
@@ -384,9 +424,10 @@ public sealed class PcapSourceReplayBackend
     {
         return matchKind switch
         {
-            Ps3SourceGameplayReplayMatchKind.ExactPayload => 3,
-            Ps3SourceGameplayReplayMatchKind.ExactTransportBody => 2,
-            Ps3SourceGameplayReplayMatchKind.TransportShape => 1,
+            Ps3SourceGameplayReplayMatchKind.ExactPayload => 4,
+            Ps3SourceGameplayReplayMatchKind.ExactTransportBody => 3,
+            Ps3SourceGameplayReplayMatchKind.TransportShape => 2,
+            Ps3SourceGameplayReplayMatchKind.LooseTransportShape => 1,
             _ => 0
         };
     }
@@ -422,6 +463,60 @@ public sealed class PcapSourceReplayBackend
             writer.Flush();
         }
     }
+
+    private static SourceReplayPayloadAnalysis AnalyzePayload(ReadOnlySpan<byte> payload, bool initialClientHandoffProbe)
+    {
+        if (!Ps3SourceTransportPacket.TryDecode(payload, out var packet))
+        {
+            return SourceReplayPayloadAnalysis.Empty;
+        }
+
+        var semantic = initialClientHandoffProbe
+            ? Ps3SourcePayloadSemantics.AnalyzeInitialClientHandoffProbe(packet.Body)
+            : Ps3SourcePayloadSemantics.Analyze(packet.Body);
+        var embeddedRecords = Ps3SourceEmbeddedObjectRecords.Extract(packet.Body)
+            .Where(static record => record.Role != Ps3SourceEmbeddedObjectRecordRole.MarkerCollisionNoise)
+            .ToArray();
+        return new SourceReplayPayloadAnalysis(
+            semantic.Kind.ToString(),
+            semantic.Role.ToString(),
+            embeddedRecords.Select(static record => record.Role.ToString()).Distinct(StringComparer.Ordinal).ToArray(),
+            embeddedRecords
+                .Select(static record => record.ObjectId)
+                .OfType<uint>()
+                .Select(static id => $"{id:x8}")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            embeddedRecords
+                .Select(static record => record.ClassId)
+                .OfType<uint>()
+                .Select(static id => $"{id:x8}")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            embeddedRecords
+                .Where(static record => record.ObjectId is not null && record.LinkedObjectId is not null)
+                .Select(static record => $"{record.ObjectId!.Value:x8}->{record.LinkedObjectId!.Value:x8}")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            embeddedRecords
+                .Select(static record => record.DisplayName)
+                .OfType<string>()
+                .Where(static value => value.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray());
+    }
+}
+
+internal sealed record SourceReplayPayloadAnalysis(
+    string? Kind,
+    string? Role,
+    string[]? EmbeddedRecordRoles,
+    string[]? EmbeddedObjectIds,
+    string[]? EmbeddedClassIds,
+    string[]? EmbeddedObjectLinks,
+    string[]? EmbeddedDisplayNames)
+{
+    public static SourceReplayPayloadAnalysis Empty { get; } = new(null, null, null, null, null, null, null);
 }
 
 public sealed record PcapSourceReplayBackendEvent(
@@ -449,9 +544,90 @@ public sealed record PcapSourceReplayBackendEvent(
     int? SourceBodyLength,
     int? SourceSequenceDelta,
     string? SourcePacketShape,
+    string? SourcePayloadSemanticKind,
+    string? SourcePayloadSemanticRole,
+    string[]? SourceEmbeddedRecordRoles,
+    string[]? SourceEmbeddedObjectIds,
+    string[]? SourceEmbeddedClassIds,
+    string[]? SourceEmbeddedObjectLinks,
+    string[]? SourceEmbeddedDisplayNames,
     int? SourceDirectionPacketCount,
     bool? SourceSequenceDecrease,
+    string? SourceSessionPhase,
+    int? SourceSessionPacketCount,
+    double? SourceSessionElapsedMilliseconds,
     double? ReplayDelayMilliseconds);
+
+internal sealed class PcapSourceReplayBackendSession
+{
+    public Ps3SourceGameplaySession Gameplay { get; } = new();
+
+    public PcapSourceReplayPhaseTracker Phase { get; } = new();
+}
+
+internal sealed class PcapSourceReplayPhaseTracker
+{
+    private const long SetupWindowMicroseconds = 2_000_000;
+    private const long LoadingWindowMicroseconds = 15_000_000;
+    private const int MinimumSetupPackets = 32;
+    private const int FallbackLoadingPacketCeiling = 205;
+
+    private DateTimeOffset? _firstTimestamp;
+    private long? _firstReplayTimestampMicroseconds;
+    private int _packetCount;
+
+    public PcapSourceReplayPhaseSnapshot Observe(DateTimeOffset timestamp, long? replayTimestampMicroseconds = null)
+    {
+        _firstTimestamp ??= timestamp;
+        _firstReplayTimestampMicroseconds ??= replayTimestampMicroseconds;
+        _packetCount++;
+        var elapsedMilliseconds = replayTimestampMicroseconds is not null && _firstReplayTimestampMicroseconds is not null
+            ? Math.Round((replayTimestampMicroseconds.Value - _firstReplayTimestampMicroseconds.Value) / 1000.0, 3)
+            : Math.Round((timestamp - _firstTimestamp.Value).TotalMilliseconds, 3);
+        var replayElapsedMicroseconds = replayTimestampMicroseconds is not null && _firstReplayTimestampMicroseconds is not null
+            ? replayTimestampMicroseconds.Value - _firstReplayTimestampMicroseconds.Value
+            : (long?)null;
+        return new PcapSourceReplayPhaseSnapshot(
+            Classify(_packetCount, replayElapsedMicroseconds),
+            _packetCount,
+            elapsedMilliseconds);
+    }
+
+    private static string Classify(int packetCount, long? replayElapsedMicroseconds)
+    {
+        if (replayElapsedMicroseconds is not null)
+        {
+            if (packetCount <= MinimumSetupPackets || replayElapsedMicroseconds.Value <= SetupWindowMicroseconds)
+            {
+                return "inferred-source-handoff-setup";
+            }
+
+            if (replayElapsedMicroseconds.Value <= LoadingWindowMicroseconds)
+            {
+                return "inferred-loading-or-motd-transfer";
+            }
+
+            return "inferred-gameplay-steady-traffic";
+        }
+
+        if (packetCount <= MinimumSetupPackets)
+        {
+            return "inferred-source-handoff-setup";
+        }
+
+        if (packetCount <= FallbackLoadingPacketCeiling)
+        {
+            return "inferred-loading-or-motd-transfer";
+        }
+
+        return "inferred-gameplay-steady-traffic";
+    }
+}
+
+internal sealed record PcapSourceReplayPhaseSnapshot(
+    string Label,
+    int PacketCount,
+    double ElapsedMilliseconds);
 
 public sealed record PcapSourceReplayScript(
     string Name,

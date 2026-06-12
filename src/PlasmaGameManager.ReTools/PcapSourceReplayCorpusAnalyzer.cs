@@ -70,6 +70,17 @@ public sealed class PcapSourceReplayCorpusAnalyzer
             .Skip(1)
             .TakeWhile(static packet => packet.Direction == PcapActiveFlowDirection.ServerToClient)
             .Count();
+        var session = new Ps3SourceGameplaySession();
+        foreach (var packet in replay.SourcePackets)
+        {
+            session.Observe(
+                packet.Direction == PcapActiveFlowDirection.ClientToServer
+                    ? Ps3SourceGameplayDirection.ClientToServer
+                    : Ps3SourceGameplayDirection.ServerToClient,
+                packet.Payload);
+        }
+
+        var sessionSummary = session.BuildSummary();
 
         return new PcapSourceReplayScriptManifest(
             Path.GetRelativePath(inputDirectory, file),
@@ -88,7 +99,14 @@ public sealed class PcapSourceReplayCorpusAnalyzer
             ExactSignature(firstClient.Payload),
             BodySignature(transport.Body),
             ShapeSignature(transport.PayloadLength, transport.Body.Length, shape),
-            Convert.ToHexString(firstClient.Payload.AsSpan(0, Math.Min(16, firstClient.Payload.Length))).ToLowerInvariant());
+            Convert.ToHexString(firstClient.Payload.AsSpan(0, Math.Min(16, firstClient.Payload.Length))).ToLowerInvariant(),
+            sessionSummary.EmbeddedRecordRoleCounts.Values.Sum(),
+            sessionSummary.EmbeddedObjectLinkCounts.Values.Sum(),
+            sessionSummary.EmbeddedDisplayNameCounts.Count,
+            TopCounts(sessionSummary.EmbeddedRecordRoleCounts, 12),
+            TopCounts(sessionSummary.EmbeddedObjectLinkCounts, 12),
+            TopCounts(sessionSummary.EmbeddedDisplayNameCounts, 12),
+            TopCounts(sessionSummary.EmbeddedClassIdCounts, 12));
     }
 
     private static PcapSourceReplayCorpusSummary BuildSummary(int fileCount, PcapSourceReplayScriptManifest[] scripts)
@@ -102,6 +120,10 @@ public sealed class PcapSourceReplayCorpusAnalyzer
             scripts.Sum(static script => script.SourcePacketCount),
             scripts.Sum(static script => script.ClientToServerPacketCount),
             scripts.Sum(static script => script.ServerToClientPacketCount),
+            scripts.Sum(static script => script.EmbeddedRecordCount),
+            scripts.Sum(static script => script.EmbeddedObjectLinkCount),
+            scripts.Count(static script => script.EmbeddedRecordCount > 0),
+            scripts.Count(static script => script.DistinctEmbeddedDisplayNameCount > 0),
             scripts.Length == 0 ? 0 : scripts.Max(static script => script.FirstClientPayloadLength),
             scripts.Select(static script => script.FirstClientExactSignature).Distinct(StringComparer.Ordinal).Count(),
             scripts.Select(static script => script.FirstClientBodySignature).Distinct(StringComparer.Ordinal).Count(),
@@ -112,6 +134,10 @@ public sealed class PcapSourceReplayCorpusAnalyzer
             exactCollisions.Sum(static group => group.Files.Length),
             bodyCollisions.Sum(static group => group.Files.Length),
             shapeCollisions.Sum(static group => group.Files.Length),
+            TopCounts(scripts.SelectMany(static script => script.EmbeddedRecordRoleCounts), 12),
+            TopCounts(scripts.SelectMany(static script => script.EmbeddedObjectLinkCounts), 12),
+            TopCounts(scripts.SelectMany(static script => script.EmbeddedDisplayNameCounts), 12),
+            TopCounts(scripts.SelectMany(static script => script.EmbeddedClassIdCounts), 12),
             bodyCollisions.Length == 0
                 ? "directory-replay-selection-can-prefer-sequence-insensitive-body-before-shape"
                 : "directory-replay-selection-needs-more-than-body-signature-disambiguation");
@@ -147,6 +173,31 @@ public sealed class PcapSourceReplayCorpusAnalyzer
         return $"{payloadLength}:{bodyLength}:{shape}";
     }
 
+    private static PcapSourceReplayCorpusCount[] TopCounts(
+        IReadOnlyDictionary<string, int> counts,
+        int take)
+    {
+        return counts
+            .OrderByDescending(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Take(take)
+            .Select(static pair => new PcapSourceReplayCorpusCount(pair.Key, pair.Value))
+            .ToArray();
+    }
+
+    private static PcapSourceReplayCorpusCount[] TopCounts(
+        IEnumerable<PcapSourceReplayCorpusCount> counts,
+        int take)
+    {
+        return counts
+            .GroupBy(static count => count.Value, StringComparer.Ordinal)
+            .Select(static group => new PcapSourceReplayCorpusCount(group.Key, group.Sum(static count => count.Count)))
+            .OrderByDescending(static count => count.Count)
+            .ThenBy(static count => count.Value, StringComparer.Ordinal)
+            .Take(take)
+            .ToArray();
+    }
+
     private sealed record PcapSourceReplayCollision(string Signature, string[] Files);
 }
 
@@ -164,6 +215,10 @@ public sealed record PcapSourceReplayCorpusSummary(
     int SourcePacketCount,
     int ClientToServerPacketCount,
     int ServerToClientPacketCount,
+    int EmbeddedRecordCount,
+    int EmbeddedObjectLinkCount,
+    int ScriptsWithEmbeddedRecords,
+    int ScriptsWithNamedEmbeddedParticipants,
     int MaxFirstClientPayloadLength,
     int UniqueExactSignatureCount,
     int UniqueBodySignatureCount,
@@ -174,7 +229,15 @@ public sealed record PcapSourceReplayCorpusSummary(
     int ScriptsInExactSignatureCollisionGroups,
     int ScriptsInBodySignatureCollisionGroups,
     int ScriptsInShapeSignatureCollisionGroups,
+    PcapSourceReplayCorpusCount[] EmbeddedRecordRoleCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedObjectLinkCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedDisplayNameCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedClassIdCounts,
     string DirectorySelectionConclusion);
+
+public sealed record PcapSourceReplayCorpusCount(
+    string Value,
+    int Count);
 
 public sealed record PcapSourceReplayCollisionGroup(
     string Signature,
@@ -197,4 +260,11 @@ public sealed record PcapSourceReplayScriptManifest(
     string FirstClientExactSignature,
     string FirstClientBodySignature,
     string FirstClientShapeSignature,
-    string FirstClientHexPrefix);
+    string FirstClientHexPrefix,
+    int EmbeddedRecordCount,
+    int EmbeddedObjectLinkCount,
+    int DistinctEmbeddedDisplayNameCount,
+    PcapSourceReplayCorpusCount[] EmbeddedRecordRoleCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedObjectLinkCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedDisplayNameCounts,
+    PcapSourceReplayCorpusCount[] EmbeddedClassIdCounts);

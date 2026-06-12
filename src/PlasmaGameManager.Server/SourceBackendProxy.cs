@@ -20,6 +20,8 @@ public sealed class SourceBackendProxy : IAsyncDisposable
 
     public string BackendEndpoint => _options.Endpoint;
 
+    public SourceBackendProtocol Protocol => _options.Protocol;
+
     public string ProtocolName => _options.ProtocolName;
 
     public async Task<SourceBackendForwardResult> ForwardAsync(
@@ -41,7 +43,8 @@ public sealed class SourceBackendProxy : IAsyncDisposable
         }
 
         var session = await GetOrCreateBackendSessionAsync(clientEndpoint, clientRemoteEndpoint, backendDatagramHandler, ct);
-        await session.Backend.SendAsync(decision.Payload, ct);
+        Console.WriteLine($"source backend proxy forward {clientEndpoint}: local={session.Backend.Client.LocalEndPoint} backend={session.BackendEndpoint} bytes={decision.Payload.Length}");
+        await session.Backend.SendAsync(decision.Payload, session.BackendEndpoint, ct);
         return new SourceBackendForwardResult(true, false, decision.Explanation);
     }
 
@@ -80,9 +83,10 @@ public sealed class SourceBackendProxy : IAsyncDisposable
             ?? addresses.FirstOrDefault()
             ?? throw new InvalidOperationException($"Could not resolve Source backend host '{_options.Host}'.");
         var backendEndpoint = new IPEndPoint(address, _options.Port);
-        var client = new UdpClient(new IPEndPoint(address.AddressFamily == AddressFamily.InterNetwork ? IPAddress.Any : IPAddress.IPv6Any, 0));
-        client.Connect(backendEndpoint);
-        var session = new SourceBackendSession(clientEndpoint, clientRemoteEndpoint, client, backendDatagramHandler, _errorSink);
+        var localAddress = address.AddressFamily == AddressFamily.InterNetwork ? address : IPAddress.IPv6Loopback;
+        var client = new UdpClient(new IPEndPoint(localAddress, 0));
+        Console.WriteLine($"source backend proxy session {clientEndpoint}: local={client.Client.LocalEndPoint} backend={backendEndpoint}");
+        var session = new SourceBackendSession(clientEndpoint, clientRemoteEndpoint, backendEndpoint, client, backendDatagramHandler, _errorSink);
 
         lock (_lock)
         {
@@ -118,16 +122,20 @@ internal sealed class SourceBackendSession : IAsyncDisposable
     public SourceBackendSession(
         string clientEndpoint,
         IPEndPoint clientRemoteEndpoint,
+        IPEndPoint backendEndpoint,
         UdpClient backend,
         Func<SourceBackendDatagram, CancellationToken, Task> backendDatagramHandler,
         Action<string, Exception>? errorSink)
     {
         _clientEndpoint = clientEndpoint;
         _clientRemoteEndpoint = clientRemoteEndpoint;
+        BackendEndpoint = backendEndpoint;
         Backend = backend;
         _backendDatagramHandler = backendDatagramHandler;
         _errorSink = errorSink;
     }
+
+    public IPEndPoint BackendEndpoint { get; }
 
     public UdpClient Backend { get; }
 
@@ -141,6 +149,7 @@ internal sealed class SourceBackendSession : IAsyncDisposable
 
     public void StartReceiveLoop()
     {
+        Console.WriteLine($"source backend proxy receive loop {_clientEndpoint}: local={Backend.Client.LocalEndPoint}");
         _receiveTask ??= Task.Run(ReceiveLoopAsync);
     }
 
@@ -172,6 +181,7 @@ internal sealed class SourceBackendSession : IAsyncDisposable
             while (!_stop.IsCancellationRequested)
             {
                 var received = await Backend.ReceiveAsync(_stop.Token);
+                Console.WriteLine($"source backend proxy recv {_clientEndpoint}: local={Backend.Client.LocalEndPoint} remote={received.RemoteEndPoint} bytes={received.Buffer.Length}");
                 IPEndPoint clientRemoteEndpoint;
                 lock (_lock)
                 {
@@ -191,6 +201,7 @@ internal sealed class SourceBackendSession : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"source backend proxy receive error {_clientEndpoint}: {ex.GetType().Name}: {ex.Message}");
             _errorSink?.Invoke(_clientEndpoint, ex);
         }
     }

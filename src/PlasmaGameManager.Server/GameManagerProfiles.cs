@@ -89,14 +89,19 @@ public sealed class Tf2Ps3Profile : Bfbc2R34Profile
 
     public override IReadOnlyList<PlasmaResponse> Handle(GameManagerSession game, PlayerSession player, PlasmaPacket packet)
     {
-        if (player.Name.StartsWith("player", StringComparison.Ordinal))
+        if (player.Name.StartsWith("player", StringComparison.Ordinal)
+            && TryReadPlayerName(packet, out var playerName))
         {
-            player.Name = "The_FridiNaTor";
+            player.Name = playerName;
         }
 
-        game.MaxPlayers = 24;
         player.LastSeen = DateTimeOffset.UtcNow;
         player.LastTransactionId = ReadTransactionId(packet, player.LastTransactionId + 1);
+        if (player.State == PlayerJoinState.SourceHandoff)
+        {
+            return Array.Empty<PlasmaResponse>();
+        }
+
         var tid = player.LastTransactionId;
         var responses = new List<PlasmaResponse>();
         var builder = new GameManagerResponseBuilder(game, player);
@@ -104,9 +109,8 @@ public sealed class Tf2Ps3Profile : Bfbc2R34Profile
         switch (packet.Kind)
         {
             case PlasmaCommandKind.ClientHello:
-                player.State = PlayerJoinState.RosterSent;
+                player.State = PlayerJoinState.Connected;
                 responses.Add(builder.ServerHello(packet));
-                AddNativeRoster(game, player, responses, builder);
                 break;
             case PlasmaCommandKind.ReservationRequest:
                 player.State = PlayerJoinState.RosterSent;
@@ -142,6 +146,19 @@ public sealed class Tf2Ps3Profile : Bfbc2R34Profile
                 break;
             case PlasmaCommandKind.TextCommand:
             case PlasmaCommandKind.Unknown:
+                if (player.State is PlayerJoinState.Connected)
+                {
+                    if (LooksLikePs3SourceHandoffPacket(packet.Payload))
+                    {
+                        player.State = PlayerJoinState.SourceHandoff;
+                        break;
+                    }
+
+                    player.State = PlayerJoinState.RosterSent;
+                    AddNativeRoster(game, player, responses, builder);
+                    break;
+                }
+
                 if (player.State is PlayerJoinState.RosterSent
                     or PlayerJoinState.RosterNoticeProcessing
                     or PlayerJoinState.RosterNoticeComplete
@@ -157,6 +174,36 @@ public sealed class Tf2Ps3Profile : Bfbc2R34Profile
         }
 
         return responses;
+    }
+
+    private static bool TryReadPlayerName(PlasmaPacket packet, out string name)
+    {
+        foreach (var key in new[] { "NAME", "name", "screenName", "players.0.props.{name}" })
+        {
+            if (packet.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                name = value.Trim();
+                return true;
+            }
+        }
+
+        name = "";
+        return false;
+    }
+
+    private static bool LooksLikePs3SourceHandoffPacket(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 32 || !Ps3SourceTransportPacket.TryDecode(payload, out var packet))
+        {
+            return false;
+        }
+
+        var frame = packet.ClassifyNativeFrame();
+        return frame.FitsNativeQueue
+            && frame.Kind is Ps3SourceNativeFrameKind.DirectDatagramCandidate
+                or Ps3SourceNativeFrameKind.DirectWithBitPayloadSidecarCandidate
+                or Ps3SourceNativeFrameKind.QueuedPeerChannelChunkCandidate
+                or Ps3SourceNativeFrameKind.FragmentedSendCandidate;
     }
 
     private static void AddNativeRoster(GameManagerSession game, PlayerSession player, List<PlasmaResponse> responses, GameManagerResponseBuilder builder)

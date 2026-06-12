@@ -148,11 +148,11 @@ public sealed record LocalInputSourcePaths(
     {
         return new LocalInputSourcePaths(
             Environment.GetEnvironmentVariable("PLASMA_BFBC2_R34_SOURCE")
-                ?? "/home/deck/Downloads/BFBC2_R34",
+                ?? ".local/source/BFBC2_R34",
             Environment.GetEnvironmentVariable("PLASMA_TF2PS3_USRDIR_SOURCE")
-                ?? "/home/deck/Emulation/storage/rpcs3/dev_hdd0/game/BLES00153/USRDIR",
+                ?? ".local/source/TF2PS3/USRDIR",
             Environment.GetEnvironmentVariable("PLASMA_PCAP_CORPUS_SOURCE")
-                ?? "/home/deck/Downloads/drive-download-20260603T151509Z-3-001");
+                ?? ".local/source/pcaps");
     }
 }
 

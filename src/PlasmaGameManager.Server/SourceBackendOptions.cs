@@ -17,6 +17,7 @@ public sealed record SourceBackendOptions(
     {
         SourceBackendProtocol.Ps3NativePassthrough => "ps3-native-passthrough",
         SourceBackendProtocol.PcSourceConnectionlessOnly => "pc-source-connectionless-only",
+        SourceBackendProtocol.Ps3NativeGenerated => "ps3-native-generated",
         _ => Protocol.ToString()
     };
 }
@@ -24,5 +25,6 @@ public sealed record SourceBackendOptions(
 public enum SourceBackendProtocol
 {
     Ps3NativePassthrough,
-    PcSourceConnectionlessOnly
+    PcSourceConnectionlessOnly,
+    Ps3NativeGenerated
 }

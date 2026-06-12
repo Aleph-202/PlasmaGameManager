@@ -48,6 +48,13 @@ public sealed class PcapSourcePacketShapeAnalyzer
                 0,
                 0,
                 0,
+                0,
+                0,
+                0,
+                0,
+                [],
+                [],
+                [],
                 [],
                 [],
                 [],
@@ -78,9 +85,16 @@ public sealed class PcapSourcePacketShapeAnalyzer
             packets.Count(static packet => PacketShape(packet) == "large-binary"),
             packets.Count(static packet => PacketShape(packet) == "near-mtu-fragment"),
             packets.Count(static packet => PacketShape(packet) == "high-entropy-binary"),
+            packets.Count(static packet => packet.PayloadSemantic.Kind == Ps3SourcePayloadSemanticKind.EmbeddedObjectOrRosterPayload),
+            packets.Count(static packet => packet.PayloadSemantic.Kind == Ps3SourcePayloadSemanticKind.EmbeddedTextCommandPayload),
+            packets.SelectMany(static packet => packet.PayloadSemantic.EmbeddedMarkers).Count(),
+            packets.SelectMany(static packet => packet.PayloadSemantic.EmbeddedMarkers.Select(static marker => marker.Marker)).Distinct(StringComparer.Ordinal).Count(),
             packets.Select(static packet => BodyPrefix(packet.Decoded.Body, 2)).Where(static prefix => prefix.Length > 0).Distinct(StringComparer.Ordinal).Count(),
             TopCounts(packets, static packet => PacketShape(packet)),
             TopCounts(packets, static packet => packet.Decoded.ClassifyNativeFrame().Kind.ToString()),
+            TopCounts(packets, static packet => packet.PayloadSemantic.Kind.ToString()),
+            TopCounts(packets, static packet => packet.PayloadSemantic.Role.ToString()),
+            TopCounts(packets.SelectMany(static packet => packet.PayloadSemantic.EmbeddedMarkers), static marker => marker.Marker),
             TopCounts(packets, static packet => packet.Decoded.Body.Length.ToString()),
             TopCounts(packets, static packet => BodyPrefix(packet.Decoded.Body, 2)),
             BuildDirectionRuns(packets),
@@ -101,13 +115,17 @@ public sealed class PcapSourcePacketShapeAnalyzer
             active.Sum(static file => file.LargeBinaryPacketCount),
             active.Sum(static file => file.NearMtuFragmentPacketCount),
             active.Sum(static file => file.HighEntropyBinaryPacketCount),
+            active.Sum(static file => file.EmbeddedObjectOrRosterPayloadCount),
+            active.Sum(static file => file.EmbeddedTextCommandPayloadCount),
+            active.Sum(static file => file.EmbeddedMarkerCount),
+            active.Length == 0 ? 0 : active.Max(static file => file.DistinctEmbeddedMarkerCount),
             active.Length == 0 ? 0 : active.Max(static file => file.DistinctBodyPrefixCount),
             active.Length == 0 ? 0 : active.Max(static file => file.DirectionRuns.Length == 0 ? 0 : file.DirectionRuns.Max(static run => run.PacketCount)));
     }
 
-    private static PcapSourcePacketShapeCount[] TopCounts(
-        IEnumerable<PacketWithBody> packets,
-        Func<PacketWithBody, string> selector)
+    private static PcapSourcePacketShapeCount[] TopCounts<T>(
+        IEnumerable<T> packets,
+        Func<T, string> selector)
     {
         return packets
             .Select(selector)
@@ -179,6 +197,9 @@ public sealed class PcapSourcePacketShapeAnalyzer
                     PacketShape(packet),
                     packet.Decoded.ClassifyNativeFrame().Kind.ToString(),
                     Math.Round(Entropy(packet.Decoded.Body), 3),
+                    packet.PayloadSemantic.Kind.ToString(),
+                    packet.PayloadSemantic.Role.ToString(),
+                    packet.PayloadSemantic.EmbeddedMarkers.Take(8).ToArray(),
                     BodyPrefix(packet.Decoded.Body, 16),
                     AsciiPreview(packet.Decoded.Body, 48));
             })
@@ -257,7 +278,10 @@ public sealed class PcapSourcePacketShapeAnalyzer
 
     private sealed record PacketWithBody(
         PcapActiveFlowDatagram Packet,
-        Ps3SourceTransportPacket Decoded);
+        Ps3SourceTransportPacket Decoded)
+    {
+        public Ps3SourcePayloadSemanticInfo PayloadSemantic { get; } = Ps3SourcePayloadSemantics.Analyze(Decoded.Body);
+    }
 }
 
 public sealed record PcapSourcePacketShapeReport(
@@ -275,6 +299,10 @@ public sealed record PcapSourcePacketShapeSummary(
     int LargeBinaryPacketCount,
     int NearMtuFragmentPacketCount,
     int HighEntropyBinaryPacketCount,
+    int EmbeddedObjectOrRosterPayloadCount,
+    int EmbeddedTextCommandPayloadCount,
+    int EmbeddedMarkerCount,
+    int MaxDistinctEmbeddedMarkerCount,
     int MaxDistinctBodyPrefixCount,
     int LongestDirectionRun);
 
@@ -291,9 +319,16 @@ public sealed record PcapSourcePacketShapeFile(
     int LargeBinaryPacketCount,
     int NearMtuFragmentPacketCount,
     int HighEntropyBinaryPacketCount,
+    int EmbeddedObjectOrRosterPayloadCount,
+    int EmbeddedTextCommandPayloadCount,
+    int EmbeddedMarkerCount,
+    int DistinctEmbeddedMarkerCount,
     int DistinctBodyPrefixCount,
     PcapSourcePacketShapeCount[] TopShapeCounts,
     PcapSourcePacketShapeCount[] TopNativeFrameKindCounts,
+    PcapSourcePacketShapeCount[] TopPayloadSemanticKindCounts,
+    PcapSourcePacketShapeCount[] TopPayloadSemanticRoleCounts,
+    PcapSourcePacketShapeCount[] TopEmbeddedMarkerCounts,
     PcapSourcePacketShapeCount[] TopBodyLengthCounts,
     PcapSourcePacketShapeCount[] TopBodyPrefixCounts,
     PcapSourcePacketShapeRun[] DirectionRuns,
@@ -326,5 +361,8 @@ public sealed record PcapSourcePacketShapeSample(
     string Shape,
     string NativeFrameKind,
     double BodyEntropy,
+    string PayloadSemanticKind,
+    string PayloadSemanticRole,
+    Ps3SourceEmbeddedMarker[] EmbeddedMarkers,
     string BodyHexPrefix,
     string BodyAsciiPreview);

@@ -66,7 +66,7 @@ public static class ReportTemplateWriter
         await WriteJson(Path.Combine(repoRoot, "re/tf2ps3/handler-map.json"), new
         {
             status = "pending-ps3-ghidra-analysis",
-            requiredScriptPath = "/home/deck/Documents/Decomp projects/Projects/Ps3GhidraScripts/",
+            requiredScriptPath = ".local/input/Ps3GhidraScripts/",
             handlers = Array.Empty<object>()
         });
 

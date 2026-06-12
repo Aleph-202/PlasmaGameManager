@@ -29,7 +29,7 @@ public static class SourceQueryResponseBuilder
         WriteCString(bytes, "tf");
         WriteCString(bytes, "Team Fortress");
         WriteUInt16LittleEndian(bytes, 440);
-        bytes.Add((byte)Math.Clamp(game.Players.Count, 0, 255));
+        bytes.Add((byte)Math.Clamp(game.SourceVisiblePlayerCount, 0, 255));
         bytes.Add((byte)Math.Clamp(game.MaxPlayers, 0, 255));
         bytes.Add(0);
         bytes.Add((byte)'d');

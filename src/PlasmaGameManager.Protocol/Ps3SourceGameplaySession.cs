@@ -58,6 +58,7 @@ public sealed class Ps3SourceGameplaySession
         state.LastSequence = packet.CandidateSequence;
         state.LastBodyLength = packet.Body.Length;
         state.ShapeCounts[shape] = state.ShapeCounts.GetValueOrDefault(shape) + 1;
+        TrackEmbeddedObjects(state, packet.Body);
         if (sequenceDecrease)
         {
             state.SequenceDecreaseCount++;
@@ -98,7 +99,11 @@ public sealed class Ps3SourceGameplaySession
             client.ShapeCounts
                 .Concat(server.ShapeCounts)
                 .GroupBy(static pair => pair.Key)
-                .ToDictionary(static group => group.Key, static group => group.Sum(static pair => pair.Value)));
+                .ToDictionary(static group => group.Key, static group => group.Sum(static pair => pair.Value)),
+            MergeCounts(client.EmbeddedRecordRoleCounts, server.EmbeddedRecordRoleCounts),
+            MergeCounts(client.EmbeddedObjectLinkCounts, server.EmbeddedObjectLinkCounts),
+            MergeCounts(client.EmbeddedDisplayNameCounts, server.EmbeddedDisplayNameCounts),
+            MergeCounts(client.EmbeddedClassIdCounts, server.EmbeddedClassIdCounts));
     }
 
     public static Ps3SourceGameplayPacketShape ClassifyShape(Ps3SourceTransportPacket packet)
@@ -134,6 +139,48 @@ public sealed class Ps3SourceGameplaySession
             && payload[1] == 0xff
             && payload[2] == 0xff
             && payload[3] == 0xff;
+    }
+
+    private static void TrackEmbeddedObjects(Ps3SourceGameplayDirectionState state, ReadOnlySpan<byte> body)
+    {
+        foreach (var record in Ps3SourceEmbeddedObjectRecords.Extract(body))
+        {
+            if (record.Role == Ps3SourceEmbeddedObjectRecordRole.MarkerCollisionNoise)
+            {
+                continue;
+            }
+
+            Increment(state.EmbeddedRecordRoleCounts, record.Role.ToString());
+            if (record.ObjectId is { } objectId && record.LinkedObjectId is { } linkedObjectId)
+            {
+                Increment(state.EmbeddedObjectLinkCounts, $"{objectId:x8}->{linkedObjectId:x8}");
+            }
+
+            if (record.DisplayName is { Length: > 0 } displayName)
+            {
+                Increment(state.EmbeddedDisplayNameCounts, displayName);
+            }
+
+            if (record.ClassId is { } classId)
+            {
+                Increment(state.EmbeddedClassIdCounts, $"{classId:x8}");
+            }
+        }
+    }
+
+    private static void Increment(Dictionary<string, int> counts, string value)
+    {
+        counts[value] = counts.GetValueOrDefault(value) + 1;
+    }
+
+    private static IReadOnlyDictionary<string, int> MergeCounts(
+        IReadOnlyDictionary<string, int> left,
+        IReadOnlyDictionary<string, int> right)
+    {
+        return left
+            .Concat(right)
+            .GroupBy(static pair => pair.Key, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.Sum(static pair => pair.Value), StringComparer.Ordinal);
     }
 
     private static double Entropy(byte[] body)
@@ -214,6 +261,14 @@ public sealed class Ps3SourceGameplayDirectionState
     public int SequenceDecreaseCount { get; set; }
 
     public Dictionary<Ps3SourceGameplayPacketShape, int> ShapeCounts { get; } = new();
+
+    public Dictionary<string, int> EmbeddedRecordRoleCounts { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, int> EmbeddedObjectLinkCounts { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, int> EmbeddedDisplayNameCounts { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, int> EmbeddedClassIdCounts { get; } = new(StringComparer.Ordinal);
 }
 
 public sealed record Ps3SourceGameplaySummary(
@@ -224,4 +279,8 @@ public sealed record Ps3SourceGameplaySummary(
     int ServerSequenceDecreaseCount,
     int? LastClientSequence,
     int? LastServerSequence,
-    IReadOnlyDictionary<Ps3SourceGameplayPacketShape, int> ShapeCounts);
+    IReadOnlyDictionary<Ps3SourceGameplayPacketShape, int> ShapeCounts,
+    IReadOnlyDictionary<string, int> EmbeddedRecordRoleCounts,
+    IReadOnlyDictionary<string, int> EmbeddedObjectLinkCounts,
+    IReadOnlyDictionary<string, int> EmbeddedDisplayNameCounts,
+    IReadOnlyDictionary<string, int> EmbeddedClassIdCounts);

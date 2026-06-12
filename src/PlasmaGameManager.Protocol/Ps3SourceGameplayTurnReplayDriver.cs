@@ -170,6 +170,37 @@ public sealed class Ps3SourceGameplayTurnReplayDriver
             return new ReplayPayloadMatch(false, Ps3SourceGameplayReplayMatchKind.None, "one or both payloads are not PS3 Source transport packets");
         }
 
+        var actualShape = Ps3SourceGameplaySession.ClassifyShape(actualTransport);
+        var expectedShape = Ps3SourceGameplaySession.ClassifyShape(expectedTransport);
+        if (actualShape != expectedShape)
+        {
+            return new ReplayPayloadMatch(false, Ps3SourceGameplayReplayMatchKind.None, $"packet shape differs actual={actualShape} expected={expectedShape}");
+        }
+
+        if (_matchMode == Ps3SourceGameplayReplayMatchMode.LooseTransportShape)
+        {
+            if (actualTransport.Body.SequenceEqual(expectedTransport.Body))
+            {
+                return new ReplayPayloadMatch(
+                    true,
+                    Ps3SourceGameplayReplayMatchKind.ExactTransportBody,
+                    $"transport body exact, sequence actual={actualTransport.CandidateSequence} expected={expectedTransport.CandidateSequence}, shape={actualShape}, len actual={actualTransport.PayloadLength} expected={expectedTransport.PayloadLength}");
+            }
+
+            if (!IsLooseLengthCompatible(actualTransport.PayloadLength, expectedTransport.PayloadLength))
+            {
+                return new ReplayPayloadMatch(
+                    false,
+                    Ps3SourceGameplayReplayMatchKind.None,
+                    $"loose payload length differs actual={actualTransport.PayloadLength} expected={expectedTransport.PayloadLength}");
+            }
+
+            return new ReplayPayloadMatch(
+                true,
+                Ps3SourceGameplayReplayMatchKind.LooseTransportShape,
+                $"loose transport shape {actualShape}, len actual={actualTransport.PayloadLength} expected={expectedTransport.PayloadLength}");
+        }
+
         if (actualTransport.PayloadLength != expectedTransport.PayloadLength)
         {
             return new ReplayPayloadMatch(
@@ -186,13 +217,6 @@ public sealed class Ps3SourceGameplayTurnReplayDriver
                 $"body length differs actual={actualTransport.Body.Length} expected={expectedTransport.Body.Length}");
         }
 
-        var actualShape = Ps3SourceGameplaySession.ClassifyShape(actualTransport);
-        var expectedShape = Ps3SourceGameplaySession.ClassifyShape(expectedTransport);
-        if (actualShape != expectedShape)
-        {
-            return new ReplayPayloadMatch(false, Ps3SourceGameplayReplayMatchKind.None, $"packet shape differs actual={actualShape} expected={expectedShape}");
-        }
-
         if (actualTransport.Body.SequenceEqual(expectedTransport.Body))
         {
             return new ReplayPayloadMatch(
@@ -202,6 +226,18 @@ public sealed class Ps3SourceGameplayTurnReplayDriver
         }
 
         return new ReplayPayloadMatch(true, Ps3SourceGameplayReplayMatchKind.TransportShape, $"transport shape {actualShape}, len={actualTransport.PayloadLength}");
+    }
+
+    private static bool IsLooseLengthCompatible(int actualLength, int expectedLength)
+    {
+        var smaller = Math.Min(actualLength, expectedLength);
+        var larger = Math.Max(actualLength, expectedLength);
+        if (larger - smaller <= 24)
+        {
+            return true;
+        }
+
+        return larger <= smaller * 2.25 && larger - smaller <= 128;
     }
 
     private sealed record ReplayPayloadMatch(

@@ -44,7 +44,22 @@ public sealed class LiveHandoffEvidenceAnalyzer
     {
         if (!File.Exists(path))
         {
-            return new LiveGameManagerEventEvidence(path, false, 0, false, 0, false, 0, "", "", "");
+            return new LiveGameManagerEventEvidence(
+                path,
+                false,
+                0,
+                false,
+                0,
+                false,
+                0,
+                "",
+                "",
+                "",
+                Array.Empty<LiveSourceSemanticRoleCount>(),
+                Array.Empty<LiveSourceEmbeddedValueCount>(),
+                Array.Empty<LiveSourceEmbeddedValueCount>(),
+                Array.Empty<LiveSourceEmbeddedValueCount>(),
+                Array.Empty<LiveSourceEmbeddedValueCount>());
         }
 
         var eventCount = 0;
@@ -53,6 +68,11 @@ public sealed class LiveHandoffEvidenceAnalyzer
         var firstEndpoint = "";
         var firstKind = "";
         var firstTimestamp = "";
+        var sourceSemanticRoles = new List<string>();
+        var embeddedRecordRoles = new List<string>();
+        var embeddedObjectLinks = new List<string>();
+        var embeddedDisplayNames = new List<string>();
+        var embeddedClassIds = new List<string>();
         foreach (var line in File.ReadLines(path))
         {
             if (string.IsNullOrWhiteSpace(line))
@@ -68,6 +88,11 @@ public sealed class LiveHandoffEvidenceAnalyzer
             if (eventName is "source-traffic" or "source-send" or "source-proxy-forward" or "source-proxy-send")
             {
                 sourceTrafficCount++;
+                AddStringProperty(sourceSemanticRoles, root, "SourcePayloadSemanticRole");
+                AddStringArrayProperty(embeddedRecordRoles, root, "SourceEmbeddedRecordRoles");
+                AddStringArrayProperty(embeddedObjectLinks, root, "SourceEmbeddedObjectLinks");
+                AddStringArrayProperty(embeddedDisplayNames, root, "SourceEmbeddedDisplayNames");
+                AddStringArrayProperty(embeddedClassIds, root, "SourceEmbeddedClassIds");
             }
 
             if (eventName != "source-handoff" || stateAfter != "SourceHandoff")
@@ -94,7 +119,12 @@ public sealed class LiveHandoffEvidenceAnalyzer
             sourceTrafficCount,
             firstEndpoint,
             firstKind,
-            firstTimestamp);
+            firstTimestamp,
+            TopSemanticRoleCounts(sourceSemanticRoles),
+            TopEmbeddedValueCounts(embeddedRecordRoles),
+            TopEmbeddedValueCounts(embeddedObjectLinks),
+            TopEmbeddedValueCounts(embeddedDisplayNames),
+            TopEmbeddedValueCounts(embeddedClassIds));
     }
 
     private LiveSourceEvidence AnalyzeSourceEvidence(string path)
@@ -151,12 +181,44 @@ public sealed class LiveHandoffEvidenceAnalyzer
     private static LiveSourceEvidence AnalyzeSourceText(string path)
     {
         var lines = File.ReadLines(path).ToArray();
-        var sourceLike = lines.Count(static line => ContainsSourceMotdToken(line));
+        var replayEvents = lines
+            .Select(ParseReplayEvent)
+            .OfType<LiveSourceReplayLine>()
+            .ToArray();
+        var sourceLikeText = lines.Count(static line => ContainsSourceTrafficTextToken(line));
+        var sourceLike = sourceLikeText + replayEvents.Length;
         var samples = lines
-            .Where(static line => ContainsSourceMotdToken(line))
+            .Where(static line => ContainsSourceTrafficTextToken(line))
             .Take(8)
             .Select(static line => line.Trim())
             .ToArray();
+        if (samples.Length < 8)
+        {
+            samples = samples
+                .Concat(replayEvents
+                    .Select(static replay => $"{replay.Event}:{replay.SourceSessionPhase}:{replay.Direction}:seq={replay.SourceSequence}")
+                    .Take(8 - samples.Length))
+                .ToArray();
+        }
+
+        var phaseCounts = replayEvents
+            .Where(static replay => replay.SourceSessionPhase.Length > 0)
+            .GroupBy(static replay => replay.SourceSessionPhase, StringComparer.Ordinal)
+            .OrderByDescending(static group => PhaseRank(group.Key))
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => new LiveSourcePhaseCount(group.Key, group.Count()))
+            .ToArray();
+        var roleCounts = replayEvents
+            .Where(static replay => replay.SourcePayloadSemanticRole.Length > 0)
+            .GroupBy(static replay => replay.SourcePayloadSemanticRole, StringComparer.Ordinal)
+            .OrderByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => new LiveSourceSemanticRoleCount(group.Key, group.Count()))
+            .ToArray();
+        var embeddedRecordRoleCounts = TopEmbeddedValueCounts(replayEvents.SelectMany(static replay => replay.SourceEmbeddedRecordRoles));
+        var embeddedObjectLinkCounts = TopEmbeddedValueCounts(replayEvents.SelectMany(static replay => replay.SourceEmbeddedObjectLinks));
+        var embeddedDisplayNameCounts = TopEmbeddedValueCounts(replayEvents.SelectMany(static replay => replay.SourceEmbeddedDisplayNames));
+        var embeddedClassIdCounts = TopEmbeddedValueCounts(replayEvents.SelectMany(static replay => replay.SourceEmbeddedClassIds));
 
         return new LiveSourceEvidence(
             path,
@@ -165,18 +227,90 @@ public sealed class LiveHandoffEvidenceAnalyzer
             sourceLike > 0,
             lines.Length,
             sourceLike,
-            samples);
+            samples)
+        {
+            SourceReplayEventCount = replayEvents.Length,
+            SourceReplayReceiveEventCount = replayEvents.Count(static replay => replay.Event == "source-replay-receive"),
+            SourceReplaySendEventCount = replayEvents.Count(static replay => replay.Event == "source-replay-send"),
+            HasSteadyGameplayTraffic = replayEvents.Any(static replay => replay.SourceSessionPhase == "inferred-gameplay-steady-traffic"),
+            HighestSourceSessionPhase = replayEvents
+                .Select(static replay => replay.SourceSessionPhase)
+                .Where(static phase => phase.Length > 0)
+                .OrderByDescending(PhaseRank)
+                .FirstOrDefault() ?? "",
+            SourceSessionPhaseCounts = phaseCounts,
+            SourcePayloadSemanticRoleCounts = roleCounts,
+            SourceEmbeddedRecordRoleCounts = embeddedRecordRoleCounts,
+            SourceEmbeddedObjectLinkCounts = embeddedObjectLinkCounts,
+            SourceEmbeddedDisplayNameCounts = embeddedDisplayNameCounts,
+            SourceEmbeddedClassIdCounts = embeddedClassIdCounts
+        };
+    }
+
+    private static LiveSourceReplayLine? ParseReplayEvent(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line) || !line.Contains("source-replay-", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var eventName = ReadString(root, "Event");
+            if (!eventName.StartsWith("source-replay-", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return new LiveSourceReplayLine(
+                eventName,
+                ReadString(root, "Direction"),
+                ReadString(root, "SourceSessionPhase"),
+                ReadString(root, "SourcePayloadSemanticRole"),
+                ReadStringArray(root, "SourceEmbeddedRecordRoles"),
+                ReadStringArray(root, "SourceEmbeddedObjectLinks"),
+                ReadStringArray(root, "SourceEmbeddedDisplayNames"),
+                ReadStringArray(root, "SourceEmbeddedClassIds"),
+                root.TryGetProperty("SourceSequence", out var sequence) && sequence.ValueKind == JsonValueKind.Number
+                    ? sequence.GetInt32()
+                    : null);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static int PhaseRank(string phase)
+    {
+        return phase switch
+        {
+            "inferred-gameplay-steady-traffic" => 3,
+            "inferred-loading-or-motd-transfer" => 2,
+            "inferred-source-handoff-setup" => 1,
+            _ => 0
+        };
     }
 
     private static bool ContainsSourceMotdToken(string text)
     {
         return text.Contains("motd", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("source", StringComparison.OrdinalIgnoreCase)
             || text.Contains("A2S_", StringComparison.OrdinalIgnoreCase)
             || text.Contains("ff ff ff ff", StringComparison.OrdinalIgnoreCase)
             || text.Contains("ffffffff", StringComparison.OrdinalIgnoreCase)
             || text.Contains("client->backend", StringComparison.OrdinalIgnoreCase)
             || text.Contains("backend->client", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsSourceTrafficTextToken(string text)
+    {
+        return ContainsSourceMotdToken(text)
+            || text.Contains("\"Event\":\"source-traffic\"", StringComparison.Ordinal)
+            || text.Contains("\"Event\":\"source-send\"", StringComparison.Ordinal)
+            || text.Contains("\"Event\":\"source-proxy-forward\"", StringComparison.Ordinal)
+            || text.Contains("\"Event\":\"source-proxy-send\"", StringComparison.Ordinal);
     }
 
     private static string[] MissingReasons(LiveGameManagerEventEvidence eventLog, LiveSourceEvidence[] sourceEvidence)
@@ -208,6 +342,67 @@ public sealed class LiveHandoffEvidenceAnalyzer
         return element.TryGetProperty(property, out var value) ? value.ToString() : "";
     }
 
+    private static string[] ReadStringArray(JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return array.EnumerateArray()
+            .Select(static item => item.GetString() ?? "")
+            .Where(static value => value.Length > 0)
+            .ToArray();
+    }
+
+    private static void AddStringProperty(List<string> values, JsonElement element, string property)
+    {
+        var value = ReadString(element, property);
+        if (value.Length > 0)
+        {
+            values.Add(value);
+        }
+    }
+
+    private static void AddStringArrayProperty(List<string> values, JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var item in array.EnumerateArray())
+        {
+            var value = item.GetString() ?? "";
+            if (value.Length > 0)
+            {
+                values.Add(value);
+            }
+        }
+    }
+
+    private static LiveSourceSemanticRoleCount[] TopSemanticRoleCounts(IEnumerable<string> values)
+    {
+        return values
+            .GroupBy(static value => value, StringComparer.Ordinal)
+            .OrderByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Take(16)
+            .Select(static group => new LiveSourceSemanticRoleCount(group.Key, group.Count()))
+            .ToArray();
+    }
+
+    private static LiveSourceEmbeddedValueCount[] TopEmbeddedValueCounts(IEnumerable<string> values)
+    {
+        return values
+            .GroupBy(static value => value, StringComparer.Ordinal)
+            .OrderByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Take(16)
+            .Select(static group => new LiveSourceEmbeddedValueCount(group.Key, group.Count()))
+            .ToArray();
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
@@ -233,7 +428,12 @@ public sealed record LiveGameManagerEventEvidence(
     int SourceTrafficEventCount,
     string FirstSourceHandoffEndpoint,
     string FirstSourceHandoffKind,
-    string FirstSourceHandoffTimestamp);
+    string FirstSourceHandoffTimestamp,
+    LiveSourceSemanticRoleCount[] SourcePayloadSemanticRoleCounts,
+    LiveSourceEmbeddedValueCount[] SourceEmbeddedRecordRoleCounts,
+    LiveSourceEmbeddedValueCount[] SourceEmbeddedObjectLinkCounts,
+    LiveSourceEmbeddedValueCount[] SourceEmbeddedDisplayNameCounts,
+    LiveSourceEmbeddedValueCount[] SourceEmbeddedClassIdCounts);
 
 public sealed record LiveSourceEvidence(
     string Path,
@@ -242,4 +442,50 @@ public sealed record LiveSourceEvidence(
     bool HasSourceOrMotdTraffic,
     int ObservedItemCount,
     int SourceOrMotdItemCount,
-    string[] SampleEvidence);
+    string[] SampleEvidence)
+{
+    public int SourceReplayEventCount { get; init; }
+
+    public int SourceReplayReceiveEventCount { get; init; }
+
+    public int SourceReplaySendEventCount { get; init; }
+
+    public bool HasSteadyGameplayTraffic { get; init; }
+
+    public string HighestSourceSessionPhase { get; init; } = "";
+
+    public LiveSourcePhaseCount[] SourceSessionPhaseCounts { get; init; } = Array.Empty<LiveSourcePhaseCount>();
+
+    public LiveSourceSemanticRoleCount[] SourcePayloadSemanticRoleCounts { get; init; } = Array.Empty<LiveSourceSemanticRoleCount>();
+
+    public LiveSourceEmbeddedValueCount[] SourceEmbeddedRecordRoleCounts { get; init; } = Array.Empty<LiveSourceEmbeddedValueCount>();
+
+    public LiveSourceEmbeddedValueCount[] SourceEmbeddedObjectLinkCounts { get; init; } = Array.Empty<LiveSourceEmbeddedValueCount>();
+
+    public LiveSourceEmbeddedValueCount[] SourceEmbeddedDisplayNameCounts { get; init; } = Array.Empty<LiveSourceEmbeddedValueCount>();
+
+    public LiveSourceEmbeddedValueCount[] SourceEmbeddedClassIdCounts { get; init; } = Array.Empty<LiveSourceEmbeddedValueCount>();
+}
+
+public sealed record LiveSourcePhaseCount(
+    string Phase,
+    int Count);
+
+public sealed record LiveSourceSemanticRoleCount(
+    string Role,
+    int Count);
+
+public sealed record LiveSourceEmbeddedValueCount(
+    string Value,
+    int Count);
+
+internal sealed record LiveSourceReplayLine(
+    string Event,
+    string Direction,
+    string SourceSessionPhase,
+    string SourcePayloadSemanticRole,
+    string[] SourceEmbeddedRecordRoles,
+    string[] SourceEmbeddedObjectLinks,
+    string[] SourceEmbeddedDisplayNames,
+    string[] SourceEmbeddedClassIds,
+    int? SourceSequence);

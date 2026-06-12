@@ -11,9 +11,40 @@ public sealed record CaptureUdpPacket(
     long PacketIndex,
     long TimestampMicroseconds);
 
+public sealed record CaptureTransportPacket(
+    string SourceAddress,
+    int SourcePort,
+    string DestinationAddress,
+    int DestinationPort,
+    string Protocol,
+    byte[] Payload,
+    long PacketIndex,
+    long TimestampMicroseconds);
+
 public static class CaptureUdpPacketParser
 {
     public static IEnumerable<CaptureUdpPacket> ReadUdpPackets(string path)
+    {
+        var packetIndex = 0L;
+        foreach (var packet in ReadTransportPackets(path))
+        {
+            if (packet.Protocol != "UDP")
+            {
+                continue;
+            }
+
+            yield return new CaptureUdpPacket(
+                packet.SourceAddress,
+                packet.SourcePort,
+                packet.DestinationAddress,
+                packet.DestinationPort,
+                packet.Payload,
+                ++packetIndex,
+                packet.TimestampMicroseconds);
+        }
+    }
+
+    public static IEnumerable<CaptureTransportPacket> ReadTransportPackets(string path)
     {
         using var fs = File.OpenRead(path);
         Span<byte> header = stackalloc byte[4];
@@ -39,7 +70,7 @@ public static class CaptureUdpPacketParser
         }
     }
 
-    private static IEnumerable<CaptureUdpPacket> ReadPcapNg(Stream stream)
+    private static IEnumerable<CaptureTransportPacket> ReadPcapNg(Stream stream)
     {
         var littleEndian = true;
         var packetIndex = 0L;
@@ -86,15 +117,16 @@ public static class CaptureUdpPacketParser
                 }
 
                 var packet = blockRest.AsSpan(20, capturedLength).ToArray();
-                if (TryExtractUdp(packet, timestampMicroseconds, out var udp))
+                packetIndex++;
+                if (TryExtractTransport(packet, timestampMicroseconds, packetIndex, out var transport))
                 {
-                    yield return udp with { PacketIndex = ++packetIndex };
+                    yield return transport;
                 }
             }
         }
     }
 
-    private static IEnumerable<CaptureUdpPacket> ReadPcap(Stream stream)
+    private static IEnumerable<CaptureTransportPacket> ReadPcap(Stream stream)
     {
         if (!TryReadExact(stream, 24, out var globalHeader))
         {
@@ -124,16 +156,21 @@ public static class CaptureUdpPacketParser
                 yield break;
             }
 
-            if (TryExtractUdp(packet, timestampMicroseconds, out var udp))
+            packetIndex++;
+            if (TryExtractTransport(packet, timestampMicroseconds, packetIndex, out var transport))
             {
-                yield return udp with { PacketIndex = ++packetIndex };
+                yield return transport;
             }
         }
     }
 
-    private static bool TryExtractUdp(ReadOnlySpan<byte> packet, long timestampMicroseconds, out CaptureUdpPacket udp)
+    private static bool TryExtractTransport(
+        ReadOnlySpan<byte> packet,
+        long timestampMicroseconds,
+        long packetIndex,
+        out CaptureTransportPacket transport)
     {
-        udp = default!;
+        transport = default!;
         var offset = 0;
 
         if (packet.Length >= 14 && packet[12] == 0x08 && packet[13] == 0x00)
@@ -159,31 +196,70 @@ public static class CaptureUdpPacketParser
         }
 
         var ihl = (packet[offset] & 0x0f) * 4;
-        if (ihl < 20 || packet.Length < offset + ihl + 8 || packet[offset + 9] != 17)
+        if (ihl < 20 || packet.Length < offset + ihl)
         {
             return false;
         }
 
         var sourceIp = new IPAddress(packet.Slice(offset + 12, 4));
         var destinationIp = new IPAddress(packet.Slice(offset + 16, 4));
-        var udpOffset = offset + ihl;
-        var sourcePort = (packet[udpOffset] << 8) | packet[udpOffset + 1];
-        var destinationPort = (packet[udpOffset + 2] << 8) | packet[udpOffset + 3];
-        var udpLength = (packet[udpOffset + 4] << 8) | packet[udpOffset + 5];
-        if (udpLength < 8 || udpOffset + udpLength > packet.Length)
+        var protocol = packet[offset + 9];
+        var transportOffset = offset + ihl;
+        if (protocol == 17)
         {
-            return false;
+            if (packet.Length < transportOffset + 8)
+            {
+                return false;
+            }
+
+            var sourcePort = (packet[transportOffset] << 8) | packet[transportOffset + 1];
+            var destinationPort = (packet[transportOffset + 2] << 8) | packet[transportOffset + 3];
+            var udpLength = (packet[transportOffset + 4] << 8) | packet[transportOffset + 5];
+            if (udpLength < 8 || transportOffset + udpLength > packet.Length)
+            {
+                return false;
+            }
+
+            transport = new CaptureTransportPacket(
+                sourceIp.ToString(),
+                sourcePort,
+                destinationIp.ToString(),
+                destinationPort,
+                "UDP",
+                packet.Slice(transportOffset + 8, udpLength - 8).ToArray(),
+                packetIndex,
+                timestampMicroseconds);
+            return true;
         }
 
-        udp = new CaptureUdpPacket(
-            sourceIp.ToString(),
-            sourcePort,
-            destinationIp.ToString(),
-            destinationPort,
-            packet.Slice(udpOffset + 8, udpLength - 8).ToArray(),
-            0,
-            timestampMicroseconds);
-        return true;
+        if (protocol == 6)
+        {
+            if (packet.Length < transportOffset + 20)
+            {
+                return false;
+            }
+
+            var sourcePort = (packet[transportOffset] << 8) | packet[transportOffset + 1];
+            var destinationPort = (packet[transportOffset + 2] << 8) | packet[transportOffset + 3];
+            var dataOffset = ((packet[transportOffset + 12] >> 4) & 0x0f) * 4;
+            if (dataOffset < 20 || packet.Length < transportOffset + dataOffset)
+            {
+                return false;
+            }
+
+            transport = new CaptureTransportPacket(
+                sourceIp.ToString(),
+                sourcePort,
+                destinationIp.ToString(),
+                destinationPort,
+                "TCP",
+                packet[(transportOffset + dataOffset)..].ToArray(),
+                packetIndex,
+                timestampMicroseconds);
+            return true;
+        }
+
+        return false;
     }
 
     private static byte ReadPcapNgTimestampResolution(ReadOnlySpan<byte> interfaceDescriptionBody, bool littleEndian)

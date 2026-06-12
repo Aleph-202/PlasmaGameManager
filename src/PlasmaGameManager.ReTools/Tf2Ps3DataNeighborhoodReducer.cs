@@ -189,6 +189,203 @@ internal sealed class Elf64BigEndianImage
         return refs.Order().ToArray();
     }
 
+    public uint[] FindU32ReferencesInLoadedSegments(uint target, bool executableOnly = false, bool writableOnly = false)
+    {
+        var refs = new List<uint>();
+        foreach (var segment in _segments)
+        {
+            if (executableOnly && !segment.IsExecutable)
+            {
+                continue;
+            }
+
+            if (writableOnly && !segment.IsWritable)
+            {
+                continue;
+            }
+
+            for (var offset = segment.FileOffset; offset + 4 <= segment.FileOffset + segment.FileSize; offset += 4)
+            {
+                if (ReadU32(_bytes, checked((int)offset)) == target)
+                {
+                    refs.Add(segment.VirtualAddress + (offset - segment.FileOffset));
+                }
+            }
+        }
+
+        return refs.Order().ToArray();
+    }
+
+    public PpcAddressLoadCandidate[] FindPpcAddressLoadCandidates(uint target, int lookaheadInstructions = 6)
+    {
+        var candidates = new List<PpcAddressLoadCandidate>();
+        var high = (ushort)(target >> 16);
+        var highAdjusted = (ushort)((target + 0x8000u) >> 16);
+        var low = (ushort)(target & 0xffff);
+
+        foreach (var segment in _segments.Where(static s => s.IsExecutable))
+        {
+            for (var offset = segment.FileOffset; offset + 4 <= segment.FileOffset + segment.FileSize; offset += 4)
+            {
+                var word = ReadU32(_bytes, checked((int)offset));
+                var opcode = word >> 26;
+                if (opcode != 15)
+                {
+                    continue;
+                }
+
+                var ra = (word >> 16) & 0x1f;
+                if (ra != 0)
+                {
+                    continue;
+                }
+
+                var imm = (ushort)(word & 0xffff);
+                var highKind = imm == high
+                    ? "high16"
+                    : imm == highAdjusted
+                        ? "high16-adjusted"
+                        : "";
+                if (highKind.Length == 0)
+                {
+                    continue;
+                }
+
+                var register = (int)((word >> 21) & 0x1f);
+                var lisAddress = segment.VirtualAddress + (offset - segment.FileOffset);
+                var maxLookahead = Math.Min(
+                    (uint)lookaheadInstructions * 4u,
+                    segment.FileOffset + segment.FileSize - offset - 4);
+                for (var delta = 4u; delta <= maxLookahead; delta += 4)
+                {
+                    var lowWord = ReadU32(_bytes, checked((int)(offset + delta)));
+                    var lowOpcode = lowWord >> 26;
+                    var lowImm = (ushort)(lowWord & 0xffff);
+                    if (lowImm != low)
+                    {
+                        continue;
+                    }
+
+                    if (lowOpcode == 24)
+                    {
+                        var sourceRegister = (int)((lowWord >> 21) & 0x1f);
+                        var targetRegister = (int)((lowWord >> 16) & 0x1f);
+                        if (sourceRegister == register && targetRegister == register)
+                        {
+                            candidates.Add(new PpcAddressLoadCandidate(
+                                lisAddress,
+                                segment.VirtualAddress + (offset + delta - segment.FileOffset),
+                                "lis+ori",
+                                highKind,
+                                register,
+                                targetRegister,
+                                delta / 4));
+                        }
+                    }
+                    else if (lowOpcode == 14)
+                    {
+                        var targetRegister = (int)((lowWord >> 21) & 0x1f);
+                        var sourceRegister = (int)((lowWord >> 16) & 0x1f);
+                        if (sourceRegister == register)
+                        {
+                            candidates.Add(new PpcAddressLoadCandidate(
+                                lisAddress,
+                                segment.VirtualAddress + (offset + delta - segment.FileOffset),
+                                "lis+addi",
+                                highKind,
+                                register,
+                                targetRegister,
+                                delta / 4));
+                        }
+                    }
+                }
+            }
+        }
+
+        return candidates
+            .OrderBy(static candidate => candidate.LisAddress)
+            .ThenBy(static candidate => candidate.LowAddress)
+            .ToArray();
+    }
+
+    public PpcOpdTocDescriptor[] FindPpc64OpdTocDescriptors()
+    {
+        var descriptors = new List<PpcOpdTocDescriptor>();
+        foreach (var segment in _segments.Where(static s => s.IsWritable))
+        {
+            for (var offset = segment.FileOffset; offset + 8 <= segment.FileOffset + segment.FileSize; offset += 4)
+            {
+                var entry = ReadU32(_bytes, checked((int)offset));
+                var toc = ReadU32(_bytes, checked((int)(offset + 4)));
+                if (!IsExecutableAddress(entry) || !IsWritableAddress(toc))
+                {
+                    continue;
+                }
+
+                descriptors.Add(new PpcOpdTocDescriptor(
+                    segment.VirtualAddress + (offset - segment.FileOffset),
+                    entry,
+                    toc));
+            }
+        }
+
+        return descriptors
+            .OrderBy(static descriptor => descriptor.DescriptorAddress)
+            .ToArray();
+    }
+
+    public PpcR2RelativeDataAccess[] FindPpcR2RelativeDataAccessesToAddresses(
+        IReadOnlyCollection<uint> targetDataAddresses,
+        IReadOnlyCollection<uint> knownTocBases)
+    {
+        var targets = targetDataAddresses.ToHashSet();
+        var tocs = knownTocBases.ToHashSet();
+        var hits = new List<PpcR2RelativeDataAccess>();
+
+        foreach (var segment in _segments.Where(static s => s.IsExecutable))
+        {
+            for (var offset = segment.FileOffset; offset + 4 <= segment.FileOffset + segment.FileSize; offset += 4)
+            {
+                var word = ReadU32(_bytes, checked((int)offset));
+                var opcode = word >> 26;
+                if (!IsR2RelativeMemoryOpcode(opcode))
+                {
+                    continue;
+                }
+
+                var ra = (word >> 16) & 0x1f;
+                if (ra != 2)
+                {
+                    continue;
+                }
+
+                var displacement = DecodeMemoryDisplacement(word, opcode);
+                foreach (var target in targets)
+                {
+                    var tocBase = unchecked(target - (uint)displacement);
+                    if (!tocs.Contains(tocBase))
+                    {
+                        continue;
+                    }
+
+                    hits.Add(new PpcR2RelativeDataAccess(
+                        InstructionAddress: segment.VirtualAddress + (offset - segment.FileOffset),
+                        InstructionWord: word,
+                        Opcode: (int)opcode,
+                        MnemonicFamily: MemoryOpcodeName(opcode),
+                        Displacement: displacement,
+                        TocBase: tocBase,
+                        TargetDataAddress: target));
+                }
+            }
+        }
+
+        return hits
+            .OrderBy(static hit => hit.InstructionAddress)
+            .ThenBy(static hit => hit.TargetDataAddress)
+            .ToArray();
+    }
+
     public bool TryReadU32(uint virtualAddress, out uint value)
     {
         var segment = FindSegment(virtualAddress);
@@ -201,6 +398,57 @@ internal sealed class Elf64BigEndianImage
         var offset = checked((int)(segment.Value.FileOffset + (virtualAddress - segment.Value.VirtualAddress)));
         value = ReadU32(_bytes, offset);
         return true;
+    }
+
+    public bool TryReadAsciiString(uint virtualAddress, int maxLength, out string value)
+    {
+        value = "";
+        var segment = FindSegment(virtualAddress);
+        if (segment is null || virtualAddress >= segment.Value.VirtualAddress + segment.Value.FileSize)
+        {
+            return false;
+        }
+
+        var offset = checked((int)(segment.Value.FileOffset + (virtualAddress - segment.Value.VirtualAddress)));
+        var limit = checked((int)Math.Min(
+            _bytes.Length,
+            segment.Value.FileOffset + segment.Value.FileSize));
+        var chars = new List<char>();
+        for (var i = offset; i < limit && chars.Count < maxLength; i++)
+        {
+            var b = _bytes[i];
+            if (b == 0)
+            {
+                break;
+            }
+
+            if (b < 0x20 || b > 0x7e)
+            {
+                return false;
+            }
+
+            chars.Add((char)b);
+        }
+
+        if (chars.Count < 3)
+        {
+            return false;
+        }
+
+        value = new string(chars.ToArray());
+        return true;
+    }
+
+    public bool IsExecutableAddress(uint virtualAddress)
+    {
+        var segment = FindSegment(virtualAddress);
+        return segment is not null && segment.Value.IsExecutable;
+    }
+
+    public bool IsWritableAddress(uint virtualAddress)
+    {
+        var segment = FindSegment(virtualAddress);
+        return segment is not null && segment.Value.IsWritable;
     }
 
     public string AnnotatePointer(uint value)
@@ -258,9 +506,68 @@ internal sealed class Elf64BigEndianImage
         return ((ulong)ReadU32(bytes, offset) << 32) | ReadU32(bytes, offset + 4);
     }
 
+    private static bool IsR2RelativeMemoryOpcode(uint opcode)
+    {
+        return opcode is 32 or 33 or 34 or 36 or 37 or 38 or 40 or 42 or 46 or 48 or 50 or 52 or 54 or 58 or 62;
+    }
+
+    private static int DecodeMemoryDisplacement(uint word, uint opcode)
+    {
+        var raw = opcode is 58 or 62
+            ? (ushort)(word & 0xfffc)
+            : (ushort)(word & 0xffff);
+        return (short)raw;
+    }
+
+    private static string MemoryOpcodeName(uint opcode)
+    {
+        return opcode switch
+        {
+            32 => "lwz",
+            33 => "lwzu",
+            34 => "lbz",
+            36 => "stw",
+            37 => "stwu",
+            38 => "stb",
+            40 => "lhz",
+            42 => "lha",
+            46 => "lmw",
+            48 => "lfs",
+            50 => "lfd",
+            52 => "stfs",
+            54 => "stfd",
+            58 => "ld/ds-form",
+            62 => "std/ds-form",
+            _ => "memory"
+        };
+    }
+
     private readonly record struct Segment(uint VirtualAddress, uint FileOffset, uint FileSize, uint MemorySize, uint Flags)
     {
         public bool IsExecutable => (Flags & 1) != 0;
         public bool IsWritable => (Flags & 2) != 0;
     }
 }
+
+internal sealed record PpcAddressLoadCandidate(
+    uint LisAddress,
+    uint LowAddress,
+    string Kind,
+    string HighImmediateKind,
+    int SourceRegister,
+    int TargetRegister,
+    uint InstructionDistance);
+
+internal sealed record PpcOpdTocDescriptor(
+    uint DescriptorAddress,
+    uint EntryAddress,
+    uint TocBase);
+
+internal sealed record PpcR2RelativeDataAccess(
+    uint InstructionAddress,
+    uint InstructionWord,
+    int Opcode,
+    string MnemonicFamily,
+    int Displacement,
+    uint TocBase,
+    uint TargetDataAddress);
