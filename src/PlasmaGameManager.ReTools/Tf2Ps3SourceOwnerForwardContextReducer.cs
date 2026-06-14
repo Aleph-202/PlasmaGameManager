@@ -29,7 +29,8 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
         string cExportPath,
         string ownerVtablePath,
         string ownerForwardTargetPath,
-        string outputPath)
+        string outputPath,
+        string? sourceRoot = null)
     {
         var allFunctions = ExtractFunctions(await File.ReadAllLinesAsync(cExportPath))
             .GroupBy(static function => function.Address, StringComparer.Ordinal)
@@ -70,6 +71,12 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
             && category5Consumer.EvidenceTokens.Contains("post-router-call-00874458", StringComparer.Ordinal);
         var context5PassedToHandler =
             category5Consumer?.EvidenceTokens.Contains("passes-context5-to-dynamic-handler-98", StringComparer.Ordinal) == true;
+        var implementation = ScanImplementation(sourceRoot);
+        var nativeOwnerForwardContextHandlersImplemented =
+            category5UsercmdRouteCandidateRecovered
+            && context5PassedToHandler
+            && implementation.Category5UsercmdContextHandlerImplemented;
+        var nativeSourceInputReady = nativeOwnerForwardContextHandlersImplemented;
         var ownerForwarderFamilyRecovered = ownerForwarders.Length >= 10
             && ownerForwarders.Any(static forwarder => forwarder.LayoutKind == "bitreader-rebuild-word5")
             && ownerForwarders.Any(static forwarder => forwarder.LayoutKind == "bitreader-rebuild-word6")
@@ -100,12 +107,12 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
                 "The exact target behind the category-5 context consumer is still an indirect vtable call, so the handler body remains unresolved."),
             new Tf2Ps3SourceOwnerForwardContextGate(
                 "native-owner-forward-context-handlers-implemented",
-                "missing",
-                "server implementation gate",
-                "The native replacement still needs semantic decoders/responders for the 008722a0 context categories."),
+                nativeOwnerForwardContextHandlersImplemented ? "proven" : "missing",
+                implementation.Category5UsercmdContextHandlerEvidence,
+                "The native replacement must route decoded 008722a0 category-5 usercmd payloads into the official CLC_Move/CUserCmd semantic handler."),
             new Tf2Ps3SourceOwnerForwardContextGate(
                 "native-source-input-ready",
-                "missing",
+                nativeSourceInputReady ? "candidate" : "missing",
                 "server/live verification gate",
                 "This remains incomplete until live/PCAP markerless client payloads are decoded into these native context commands.")
         };
@@ -126,8 +133,8 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
                 ownerForwarderFamilyRecovered,
                 category5UsercmdRouteCandidateRecovered,
                 context5PassedToHandler,
-                false,
-                false,
+                nativeOwnerForwardContextHandlersImplemented,
+                nativeSourceInputReady,
                 gates.Count(static gate => gate.Status is "missing" or "candidate")),
             new Tf2Ps3SourceOwnerForwardContextConsumer(
                 "00a2b060",
@@ -225,6 +232,39 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
         AddIf(body, tokens, "+ 0x6358", "writes-runtime-field-6358");
         AddIf(body, tokens, "+ 0x6344", "writes-runtime-field-6344");
         return tokens.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static NativeOwnerForwardContextImplementationScan ScanImplementation(string? sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot) || !Directory.Exists(sourceRoot))
+        {
+            return new NativeOwnerForwardContextImplementationScan(
+                false,
+                sourceRoot is null ? "source root not supplied" : $"source root not found: {sourceRoot}");
+        }
+
+        var text = string.Join('\n', Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}PlasmaGameManager.ReTools{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(File.ReadAllText));
+
+        var implemented =
+            text.Contains("owner-forward-context", StringComparison.Ordinal)
+            && text.Contains("ApplyNativeSourceClcMoveBoundaryContext", StringComparison.Ordinal)
+            && text.Contains("OwnerForwarderWord6Bitstream", StringComparison.Ordinal)
+            && text.Contains("OwnerForwarderDeferredPointerWord6Bitstream", StringComparison.Ordinal)
+            && text.Contains("OwnerForwarderConfigFallbackWord4Bitstream", StringComparison.Ordinal)
+            && text.Contains("ApplyNativeSourceClientCommandContext", StringComparison.Ordinal)
+            && text.Contains("source-usercmd", StringComparison.Ordinal)
+            && text.Contains("OfficialEatf2ServerDllContracts.CUserCmdStrideBytes", StringComparison.Ordinal);
+
+        return new NativeOwnerForwardContextImplementationScan(
+            implemented,
+            implemented
+                ? "GameManagerState routes decoded owner-forward 008722a0 bitstream boundaries through ApplyNativeSourceClcMoveBoundaryContext and the official CLC_Move/CUserCmd semantic path"
+                : "native owner-forward category-5 usercmd context handler markers not found");
     }
 
     private static string ClassifyForwarderLayout(IReadOnlyCollection<string> tokens)
@@ -474,6 +514,10 @@ public static class Tf2Ps3SourceOwnerForwardContextReducer
         int EndLine,
         string[] Lines,
         string Body);
+
+    private sealed record NativeOwnerForwardContextImplementationScan(
+        bool Category5UsercmdContextHandlerImplemented,
+        string Category5UsercmdContextHandlerEvidence);
 }
 
 public sealed record Tf2Ps3SourceOwnerForwardContextReport(

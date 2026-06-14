@@ -34,7 +34,8 @@ public static class Tf2Ps3SourcePayloadObjectDispatchReducer
     public static async Task<Tf2Ps3SourcePayloadObjectDispatchReport> ReduceAsync(
         string cExportPath,
         string prePayloadReceivePath,
-        string outputPath)
+        string outputPath,
+        string? sourceRoot = null)
     {
         var functions = ExtractFunctions(await File.ReadAllLinesAsync(cExportPath))
             .Where(static function => TargetAddresses.Contains(function.Address, StringComparer.Ordinal))
@@ -45,6 +46,7 @@ public static class Tf2Ps3SourcePayloadObjectDispatchReducer
             .ToArray();
 
         using var prePayload = JsonDocument.Parse(await File.ReadAllTextAsync(prePayloadReceivePath));
+        var implementation = ScanImplementation(sourceRoot);
         var prePayloadSummary = prePayload.RootElement.GetProperty("Summary");
         var prePayloadBoundaryProven =
             ReadBool(prePayloadSummary, "QueueInsertionCopiesPayload")
@@ -132,17 +134,17 @@ public static class Tf2Ps3SourcePayloadObjectDispatchReducer
                 "The live update caller passes the connection id at +0x6b and owner/control subobject at +0x69 into the payload-object dispatch loop."),
             new Tf2Ps3SourcePayloadObjectDispatchGate(
                 "native-associated-slot90-handler-implemented",
-                "missing",
-                "server implementation gate",
+                implementation.AssociatedSlot90HandlerImplemented ? "proven" : "missing",
+                implementation.AssociatedSlot90Evidence,
                 "The native replacement still needs semantic consumers for associated-object slot +0x90 payloads."),
             new Tf2Ps3SourcePayloadObjectDispatchGate(
                 "native-owner-slot8-handler-implemented",
-                "missing",
-                "server implementation gate",
+                implementation.OwnerSlot8HandlerImplemented ? "proven" : "missing",
+                implementation.OwnerSlot8Evidence,
                 "The native replacement still needs semantic consumers for owner-slot +0x08 control payloads."),
             new Tf2Ps3SourcePayloadObjectDispatchGate(
                 "native-markerless-input-complete",
-                "missing",
+                implementation.AssociatedSlot90HandlerImplemented && implementation.OwnerSlot8HandlerImplemented ? "candidate" : "missing",
                 "server/live verification gate",
                 "This is not complete until these dispatch paths decode the hard markerless PCAP/live client packets into named fields and map-load is proven live.")
         };
@@ -164,9 +166,9 @@ public static class Tf2Ps3SourcePayloadObjectDispatchReducer
                 filterGateRecovered,
                 finalizerRecovered,
                 creatorReusesLookup,
-                false,
-                false,
-                false,
+                implementation.AssociatedSlot90HandlerImplemented,
+                implementation.OwnerSlot8HandlerImplemented,
+                implementation.AssociatedSlot90HandlerImplemented && implementation.OwnerSlot8HandlerImplemented,
                 gates.Count(static gate => gate.Status is "missing" or "needs-review")),
             functions,
             [
@@ -191,6 +193,41 @@ public static class Tf2Ps3SourcePayloadObjectDispatchReducer
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, JsonOptions));
         return report;
+    }
+
+    private static NativePayloadConsumerScan ScanImplementation(string? sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot) || !Directory.Exists(sourceRoot))
+        {
+            return new NativePayloadConsumerScan(
+                false,
+                false,
+                "server implementation source not supplied",
+                "server implementation source not supplied");
+        }
+
+        var text = string.Join('\n', Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}PlasmaGameManager.ReTools{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(File.ReadAllText));
+        var associated =
+            text.Contains("associated-slot90", StringComparison.Ordinal)
+            && text.Contains("Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken", StringComparison.Ordinal)
+            && text.Contains("vtable+0x90", StringComparison.Ordinal);
+        var owner =
+            text.Contains("owner-slot8-control", StringComparison.Ordinal)
+            && text.Contains("OwnerSlot8Bitstream", StringComparison.Ordinal)
+            && text.Contains("00a52720->008722a0", StringComparison.Ordinal);
+        return new NativePayloadConsumerScan(
+            associated,
+            owner,
+            associated
+                ? "GameManagerState.ApplyNativeSourceClcMoveBoundaryContext records associated-slot90 contexts for AssociatedObjectToken payloads."
+                : "associated-slot90 semantic context handler not found",
+            owner
+                ? "GameManagerState.ApplyNativeSourceClcMoveBoundaryContext records owner-slot8-control contexts for OwnerSlot8Bitstream payloads."
+                : "owner-slot8-control semantic context handler not found");
     }
 
     private static Tf2Ps3SourcePayloadObjectDispatchFunction BuildFunction(ExportedFunction function) =>
@@ -404,3 +441,9 @@ public sealed record Tf2Ps3SourcePayloadObjectDispatchGate(
     string Status,
     string Evidence,
     string Meaning);
+
+internal sealed record NativePayloadConsumerScan(
+    bool AssociatedSlot90HandlerImplemented,
+    bool OwnerSlot8HandlerImplemented,
+    string AssociatedSlot90Evidence,
+    string OwnerSlot8Evidence);

@@ -46,6 +46,8 @@ public static class Ps3SourcePayloadSemantics
         {
             _ when nativeMessageRole == Ps3SourcePayloadSemanticRole.NativeLzssCompressed
                 => Ps3SourcePayloadSemanticKind.NativeWrappedPayload,
+            _ when nativeMessageRole == Ps3SourcePayloadSemanticRole.NativeObjectStreamBootstrap
+                => Ps3SourcePayloadSemanticKind.NativeObjectStreamPayload,
             > 0 when markers.Any(static marker => marker.Marker == "PRD")
                 => Ps3SourcePayloadSemanticKind.EntityDeltaPayload,
             > 0 when embeddedRecords.Length > 0
@@ -67,7 +69,8 @@ public static class Ps3SourcePayloadSemantics
             markers,
             Math.Round(printableRatio, 4),
             Math.Round(Entropy(body), 4),
-            AsciiPreview(body, 96));
+            AsciiPreview(body, 96),
+            NativeFieldSummary(body, nativeMessageRole, embeddedRecords));
     }
 
     private static Ps3SourcePayloadSemanticInfo? TryAnalyzeNativeEntityDelta(ReadOnlySpan<byte> body)
@@ -172,6 +175,13 @@ public static class Ps3SourcePayloadSemantics
             return Ps3SourcePayloadSemanticRole.NativeLzssCompressed;
         }
 
+        if (Ps3SourceObjectStream.TryDecode(body, out var objectStream)
+            && objectStream.Payload.Length > 0
+            && Ps3SourceNetMessages.TryReadMessageType(objectStream.Payload, out _))
+        {
+            return Ps3SourcePayloadSemanticRole.NativeObjectStreamBootstrap;
+        }
+
         if (body.Length < 5
             || body[0] != 0xff
             || body[1] != 0xff
@@ -183,11 +193,112 @@ public static class Ps3SourcePayloadSemantics
 
         return body[4] switch
         {
+            0x41 => Ps3SourcePayloadSemanticRole.NativeHudPlayerObjectUpdate41,
             0x44 => Ps3SourcePayloadSemanticRole.NativePlayerSummary44,
             0x45 => Ps3SourcePayloadSemanticRole.NativeResourceStringTable45,
             0x49 => Ps3SourcePayloadSemanticRole.NativeServerInfo49,
+            0x6b => Ps3SourcePayloadSemanticRole.NativeGameplayStatTimesUsed6b,
             _ => null
         };
+    }
+
+    private static string NativeFieldSummary(
+        ReadOnlySpan<byte> body,
+        Ps3SourcePayloadSemanticRole? role,
+        IReadOnlyList<Ps3SourceEmbeddedObjectRecord> embeddedRecords)
+    {
+        var nativeSummary = role switch
+        {
+            Ps3SourcePayloadSemanticRole.NativeHudPlayerObjectUpdate41
+                when Ps3SourceNativeMessages.TryDecodeHudPlayerObjectUpdate(body, out var hudUpdate)
+                    => hudUpdate.Update.SecondaryValue is { } secondaryValue
+                        ? $"hud-object primary={hudUpdate.Update.PrimaryValue} secondary={secondaryValue} label={hudUpdate.Update.Label ?? ""}"
+                        : $"hud-object primary={hudUpdate.Update.PrimaryValue}",
+            Ps3SourcePayloadSemanticRole.NativePlayerSummary44
+                when Ps3SourceNativeMessages.TryDecodePlayerSummary(body, out var summary)
+                    => summary.Entries.Length == 0
+                        ? $"players={summary.SummaryHeaderValue}"
+                        : $"players={summary.SummaryHeaderValue} first={summary.Entries[0].DisplayName} score={summary.Entries[0].ScoreOrStat}",
+            Ps3SourcePayloadSemanticRole.NativeResourceStringTable45
+                when Ps3SourceNativeMessages.TryDecodeResourceStringTable(body, out var table)
+                    => table.Entries.Length == 0
+                        ? "resources=0"
+                        : $"resources={table.Entries.Length} first={table.Entries[0].ResourceName}:{table.Entries[0].Classification}",
+            Ps3SourcePayloadSemanticRole.NativeServerInfo49
+                when Ps3SourceNativeMessages.TryDecodeServerInfo(body, out var serverInfo)
+                    => $"server={serverInfo.Info.ServerName} map={serverInfo.Info.MapName} players={serverInfo.Info.CurrentPlayers}/{serverInfo.Info.MaxPlayers} address={serverInfo.Info.ConnectionAddress}",
+            Ps3SourcePayloadSemanticRole.NativeGameplayStatTimesUsed6b
+                when Ps3SourceNativeMessages.TryDecodeGameplayStatTimesUsed(body, out var stat)
+                    => $"timesused kind={stat.Update.VersionOrKind} state={stat.Update.State} value={stat.Update.Value} object={stat.Update.ObjectName} class={stat.Update.Classification}",
+            Ps3SourcePayloadSemanticRole.NativeObjectStreamBootstrap
+                when Ps3SourceObjectStream.TryDecode(body, out var objectStream)
+                    => NativeObjectStreamSummary(objectStream),
+            _ => ""
+        };
+        if (!string.IsNullOrWhiteSpace(nativeSummary))
+        {
+            return nativeSummary;
+        }
+
+        var validRecords = embeddedRecords
+            .Where(static record => record.Role != Ps3SourceEmbeddedObjectRecordRole.MarkerCollisionNoise)
+            .ToArray();
+        if (validRecords.Length == 0)
+        {
+            return "";
+        }
+
+        return EmbeddedRecordFieldSummary(validRecords);
+    }
+
+    private static string NativeObjectStreamSummary(Ps3SourceDecodedObjectStreamRecord objectStream)
+    {
+        var firstMessage = Ps3SourceNetMessages.TryReadMessageType(objectStream.Payload, out var messageType)
+            ? Ps3SourceNetMessages.MessageTypeName(messageType)
+            : "unknown";
+        return $"kind={objectStream.MessageKind} owner={objectStream.OwnerOrCallbackId:x8} seq={objectStream.SequenceA}/{objectStream.SequenceB} payload={objectStream.Payload.Length} first={firstMessage}";
+    }
+
+    private static string EmbeddedRecordFieldSummary(IReadOnlyList<Ps3SourceEmbeddedObjectRecord> records)
+    {
+        var roleCounts = records
+            .GroupBy(static record => record.Role)
+            .OrderBy(static group => group.Key)
+            .Select(static group => $"{group.Key}={group.Count()}");
+        var first = records[0];
+        var builder = new StringBuilder();
+        builder.Append("records=");
+        builder.Append(records.Count);
+        builder.Append(" roles=");
+        builder.Append(string.Join(",", roleCounts));
+        builder.Append(" first=");
+        builder.Append(first.Marker);
+        builder.Append(" object=");
+        builder.Append(Hex(first.ObjectId));
+        if (first.Role == Ps3SourceEmbeddedObjectRecordRole.PlayerStateLink)
+        {
+            builder.Append(" linked=");
+            builder.Append(Hex(first.LinkedObjectId));
+        }
+        else
+        {
+            builder.Append(" owner=");
+            builder.Append(Hex(first.FieldB));
+            builder.Append(" class=");
+            builder.Append(Hex(first.ClassId));
+            if (!string.IsNullOrWhiteSpace(first.DisplayName))
+            {
+                builder.Append(" name=");
+                builder.Append(first.DisplayName);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string Hex(uint? value)
+    {
+        return value is null ? "????????" : value.Value.ToString("x8");
     }
 
     public static Ps3SourcePayloadSemanticInfo AnalyzeInitialClientHandoffProbe(ReadOnlySpan<byte> body)
@@ -376,7 +487,8 @@ public enum Ps3SourcePayloadSemanticKind
     MixedTextBinaryPayload,
     BinaryGameplayPayload,
     HighEntropyPayload,
-    NativeWrappedPayload
+    NativeWrappedPayload,
+    NativeObjectStreamPayload
 }
 
 public enum Ps3SourcePayloadSemanticRole
@@ -396,9 +508,11 @@ public enum Ps3SourcePayloadSemanticRole
     InitialHandoffClientProbe,
     BinaryGameplay,
     HighEntropyBinary,
+    NativeHudPlayerObjectUpdate41,
     NativePlayerSummary44,
     NativeResourceStringTable45,
     NativeServerInfo49,
+    NativeGameplayStatTimesUsed6b,
     NativePlayerResourceDelta,
     NativePlayerEntityDelta,
     NativeGameplayStateDelta,
@@ -409,7 +523,8 @@ public enum Ps3SourcePayloadSemanticRole
     NativeTfExplosionEvent,
     NativePlayerAnimEvent,
     NativeWeaponEntityDelta,
-    NativeLzssCompressed
+    NativeLzssCompressed,
+    NativeObjectStreamBootstrap
 }
 
 public sealed record Ps3SourcePayloadSemanticInfo(
@@ -418,7 +533,8 @@ public sealed record Ps3SourcePayloadSemanticInfo(
     Ps3SourceEmbeddedMarker[] EmbeddedMarkers,
     double PrintableRatio,
     double Entropy,
-    string AsciiPreview);
+    string AsciiPreview,
+    string NativeFieldSummary = "");
 
 public sealed record Ps3SourceEmbeddedMarker(
     string Marker,

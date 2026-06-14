@@ -114,31 +114,32 @@ public sealed class UdpGameManagerServer
     private async Task HandleReceivedAsync(UdpClient socket, UdpReceiveResult received, CancellationToken ct)
     {
         ReloadSourceLaunchProfileIfChanged();
+        var localPort = ((IPEndPoint)socket.Client.LocalEndPoint!).Port;
         var endpoint = received.RemoteEndPoint.ToString();
         var player = _game.GetOrAddPlayer(endpoint);
         player.LastSeen = DateTimeOffset.UtcNow;
         var packet = _classifier.Decode(received.Buffer, enableNativeBinary: true);
         var command = _commandDecoder.Decode(packet);
         var stateBefore = player.State;
-        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} <= {endpoint} {packet.Explanation} hex={packet.HexPrefix()} ascii=\"{packet.AsciiPreview(64)}\"");
+        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} <= {endpoint} local={localPort} {packet.Explanation} hex={packet.HexPrefix()} ascii=\"{packet.AsciiPreview(64)}\"");
 
         if (stateBefore == PlayerJoinState.SourceHandoff)
         {
-            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, ct);
+            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, localPort, ct);
             return;
         }
 
         var responses = _profile.Handle(_game, player, packet);
-        RecordPacketEvent("receive", endpoint, packet, command, stateBefore, player.State);
+        RecordPacketEvent("receive", endpoint, packet, command, stateBefore, player.State, localPort: localPort);
         if (stateBefore != PlayerJoinState.SourceHandoff && player.State == PlayerJoinState.SourceHandoff)
         {
-            RecordPacketEvent("source-handoff", endpoint, packet, command, stateBefore, player.State);
-            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ** {endpoint} SOURCE_HANDOFF profile={_profile.Name} via={packet.Kind}");
+            RecordPacketEvent("source-handoff", endpoint, packet, command, stateBefore, player.State, localPort: localPort);
+            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ** {endpoint} local={localPort} SOURCE_HANDOFF profile={_profile.Name} via={packet.Kind}");
         }
 
         if (player.State == PlayerJoinState.SourceHandoff && packet.Kind == PlasmaCommandKind.SourceProbe)
         {
-            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, ct);
+            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, localPort, ct);
             return;
         }
 
@@ -146,17 +147,17 @@ public sealed class UdpGameManagerServer
             && player.State == PlayerJoinState.SourceHandoff
             && packet.Kind is PlasmaCommandKind.Unknown or PlasmaCommandKind.TextCommand)
         {
-            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, ct);
+            await HandleSourceTrafficAsync(socket, received, endpoint, player, packet, command, localPort, ct);
             return;
         }
 
         foreach (var response in responses)
         {
             await socket.SendAsync(response.Payload, response.Payload.Length, received.RemoteEndPoint);
-            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} => {endpoint} {response.Kind} {response.Explanation} len={response.Payload.Length}");
+            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} => {endpoint} local={localPort} {response.Kind} {response.Explanation} len={response.Payload.Length}");
             var responsePacket = _classifier.Decode(response.Payload, enableNativeBinary: true);
             var responseCommand = _commandDecoder.Decode(responsePacket);
-            RecordPacketEvent("send", endpoint, responsePacket, responseCommand, player.State, player.State, response.Explanation);
+            RecordPacketEvent("send", endpoint, responsePacket, responseCommand, player.State, player.State, response.Explanation, localPort: localPort);
         }
     }
 
@@ -381,15 +382,16 @@ public sealed class UdpGameManagerServer
         PlayerSession player,
         PlasmaPacket packet,
         GameManagerCommand command,
+        int localPort,
         CancellationToken ct)
     {
         _game.EnsureNativeSourceLifecycle(player);
         var clientSourceObservation = player.SourceGameplay.Observe(Ps3SourceGameplayDirection.ClientToServer, packet.Payload);
-        RecordPacketEvent("source-traffic", endpoint, packet, command, player.State, player.State, sourceObservation: clientSourceObservation, nativeSourcePlayer: player);
-        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~ {endpoint} SOURCE_TRAFFIC {packet.Explanation} len={packet.Payload.Length}");
+        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~ {endpoint} local={localPort} SOURCE_TRAFFIC {packet.Explanation} len={packet.Payload.Length}");
         if ((!_sourceProxy.IsEnabled || _sourceProxy.Protocol == SourceBackendProtocol.Ps3NativeGenerated)
             && SourceQueryResponseBuilder.TryBuildInfoResponse(_game, packet.Payload, out var queryResponse))
         {
+            RecordPacketEvent("source-traffic", endpoint, packet, command, player.State, player.State, sourceObservation: clientSourceObservation, nativeSourcePlayer: player, localPort: localPort);
             await socket.SendAsync(queryResponse.Payload, queryResponse.Payload.Length, received.RemoteEndPoint);
             RecordRawEvent(
                 "source-send",
@@ -400,14 +402,16 @@ public sealed class UdpGameManagerServer
                 queryResponse.Payload.Length,
                 queryResponse.Explanation,
                 Convert.ToHexString(queryResponse.Payload.AsSpan(0, Math.Min(8, queryResponse.Payload.Length))).ToLowerInvariant(),
-                queryResponse.Payload);
-            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} {queryResponse.Explanation} len={queryResponse.Payload.Length}");
+                queryResponse.Payload,
+                localPort: localPort);
+            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} local={localPort} {queryResponse.Explanation} len={queryResponse.Payload.Length}");
             return;
         }
 
         if (_sourceProxy.Protocol == SourceBackendProtocol.Ps3NativeGenerated)
         {
             var generatedResponses = _nativeSourceResponder.BuildResponses(_game, player, packet.Payload);
+            RecordPacketEvent("source-traffic", endpoint, packet, command, player.State, player.State, sourceObservation: clientSourceObservation, nativeSourcePlayer: player, localPort: localPort);
             if (generatedResponses.Count == 0)
             {
                 if (IsExpectedNativeSourceWait(player, packet.Payload.Length))
@@ -424,7 +428,8 @@ public sealed class UdpGameManagerServer
                     player.State,
                     "PS3-native generated Source responder did not recognize a response-worthy transport packet.",
                     clientSourceObservation,
-                    nativeSourcePlayer: player);
+                    nativeSourcePlayer: player,
+                    localPort: localPort);
                 return;
             }
 
@@ -444,8 +449,9 @@ public sealed class UdpGameManagerServer
                     Convert.ToHexString(outboundPayload.AsSpan(0, Math.Min(8, outboundPayload.Length))).ToLowerInvariant(),
                     outboundPayload,
                     generatedObservation,
-                    nativeSourcePlayer: player);
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} generated PS3 Source datagram len={outboundPayload.Length}: {generated.Explanation}");
+                    nativeSourcePlayer: player,
+                    localPort: localPort);
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} local={localPort} generated PS3 Source datagram len={outboundPayload.Length}: {generated.Explanation}");
             }
 
             return;
@@ -453,6 +459,7 @@ public sealed class UdpGameManagerServer
 
         if (_sourceProxy.IsEnabled)
         {
+            RecordPacketEvent("source-traffic", endpoint, packet, command, player.State, player.State, sourceObservation: clientSourceObservation, nativeSourcePlayer: player, localPort: localPort);
             var forwardResult = await _sourceProxy.ForwardAsync(
                 endpoint,
                 received.RemoteEndPoint,
@@ -474,8 +481,9 @@ public sealed class UdpGameManagerServer
                             $"dropped Source backend datagram from {_sourceProxy.BackendEndpoint}: {backendDecision.Explanation}",
                             Convert.ToHexString(datagram.Payload.AsSpan(0, Math.Min(8, datagram.Payload.Length))).ToLowerInvariant(),
                             datagram.Payload,
-                            backendObservation);
-                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~x {datagram.ClientEndpoint} dropped Source backend datagram len={datagram.Payload.Length}: {backendDecision.Explanation}");
+                            backendObservation,
+                            localPort: localPort);
+                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~x {datagram.ClientEndpoint} local={localPort} dropped Source backend datagram len={datagram.Payload.Length}: {backendDecision.Explanation}");
                         return;
                     }
 
@@ -491,8 +499,9 @@ public sealed class UdpGameManagerServer
                         $"proxied Source backend datagram from {_sourceProxy.BackendEndpoint}: {backendDecision.Explanation}",
                         Convert.ToHexString(outboundPayload.AsSpan(0, Math.Min(8, outboundPayload.Length))).ToLowerInvariant(),
                         outboundPayload,
-                        backendObservation);
-                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {datagram.ClientEndpoint} proxied Source backend datagram len={outboundPayload.Length}");
+                        backendObservation,
+                        localPort: localPort);
+                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {datagram.ClientEndpoint} local={localPort} proxied Source backend datagram len={outboundPayload.Length}");
                 },
                 ct);
             if (forwardResult.Forwarded)
@@ -505,7 +514,8 @@ public sealed class UdpGameManagerServer
                     player.State,
                     player.State,
                     $"proxied client datagram from PS3-facing GameManager flow to Source backend {_sourceProxy.BackendEndpoint} via {_sourceProxy.ProtocolName}: {forwardResult.Explanation}",
-                    clientSourceObservation);
+                    clientSourceObservation,
+                    localPort: localPort);
                 return;
             }
 
@@ -519,7 +529,8 @@ public sealed class UdpGameManagerServer
                     player.State,
                     player.State,
                     $"did not forward client datagram to Source backend {_sourceProxy.BackendEndpoint} via {_sourceProxy.ProtocolName}: {forwardResult.Explanation}",
-                    clientSourceObservation);
+                    clientSourceObservation,
+                    localPort: localPort);
                 return;
             }
         }
@@ -530,14 +541,18 @@ public sealed class UdpGameManagerServer
         }
 
         await socket.SendAsync(response.Payload, response.Payload.Length, received.RemoteEndPoint);
-        RecordRawEvent("source-send", endpoint, response.Kind.ToString(), player.State, player.State, response.Payload.Length, response.Explanation, Convert.ToHexString(response.Payload.AsSpan(0, Math.Min(8, response.Payload.Length))).ToLowerInvariant(), response.Payload);
-        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} {response.Explanation} len={response.Payload.Length}");
+        RecordRawEvent("source-send", endpoint, response.Kind.ToString(), player.State, player.State, response.Payload.Length, response.Explanation, Convert.ToHexString(response.Payload.AsSpan(0, Math.Min(8, response.Payload.Length))).ToLowerInvariant(), response.Payload, localPort: localPort);
+        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} ~~> {endpoint} local={localPort} {response.Explanation} len={response.Payload.Length}");
     }
 
     private static bool IsExpectedNativeSourceWait(PlayerSession player, int payloadLength)
     {
         var state = player.NativeSourceResponder;
         return (state.PendingPostRosterFrozenStateUpload && payloadLength >= 200)
+            || (state.QuickMatchTerminalPromptStage == 1
+            && !state.SentQuickMatchTerminalMapLoad
+            && payloadLength != 56
+            && (payloadLength < 160 || payloadLength > 260))
             || (state.QuickMatchTerminalPromptStage == 2
             && !state.SentQuickMatchTerminalMapLoad
             && payloadLength != 56);
@@ -552,9 +567,11 @@ public sealed class UdpGameManagerServer
         PlayerJoinState stateAfter,
         string? explanationOverride = null,
         Ps3SourceGameplayObservation? sourceObservation = null,
-        PlayerSession? nativeSourcePlayer = null)
+        PlayerSession? nativeSourcePlayer = null,
+        int? localPort = null)
     {
-        var sourceTransport = BuildSourceEventData(eventName, packet.Payload, sourceObservation);
+        var sourceTransport = BuildSourceEventData(eventName, packet.Payload, sourceObservation, nativeSourcePlayer);
+        var semanticContext = LatestNativeSourceSemanticContext(nativeSourcePlayer);
         _eventSink?.Record(new GameManagerServerEvent(
             DateTimeOffset.UtcNow,
             _profile.Name,
@@ -582,6 +599,7 @@ public sealed class UdpGameManagerServer
             SourceFragmentHeaderHex: sourceTransport.FragmentHeaderHex,
             SourcePayloadSemanticKind: sourceTransport.PayloadSemanticKind,
             SourcePayloadSemanticRole: sourceTransport.PayloadSemanticRole,
+            SourceNativeFieldSummary: sourceTransport.NativeFieldSummary,
             SourceCompactControlFamily: sourceTransport.CompactControlFamily,
             SourceCompactControlPrefixLength: sourceTransport.CompactControlPrefixLength,
             SourceCompactControlPrefixHex: sourceTransport.CompactControlPrefixHex,
@@ -654,6 +672,13 @@ public sealed class UdpGameManagerServer
             SourceClientCommandWeaponSlotHint: sourceTransport.ClientCommandWeaponSlotHint,
             SourceClientCommandTeamHint: sourceTransport.ClientCommandTeamHint,
             SourceClientCommandClassHint: sourceTransport.ClientCommandClassHint,
+            NativeSourceSemanticContextKind: semanticContext?.ContextKind,
+            NativeSourceSemanticContextDetail: semanticContext?.Detail,
+            NativeSourceSemanticContextPacketCount: semanticContext?.PacketCount,
+            NativeSourceSemanticContextSequence: semanticContext?.Sequence,
+            NativeSourceSemanticContextPayloadRole: semanticContext?.PayloadRole,
+            NativeSourceSemanticContextNativeFrameKind: semanticContext?.NativeFrameKind,
+            NativeSourceSemanticContextBodyHash: semanticContext?.BodyHash,
             NativeSourceClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.ClientPacketCount,
             NativeSourceServerPacketCount: nativeSourcePlayer?.NativeSourceResponder.ServerPacketCount,
             NativeSourceSentInitialSetup: nativeSourcePlayer?.NativeSourceResponder.SentInitialSetup,
@@ -673,7 +698,8 @@ public sealed class UdpGameManagerServer
             NativeSourceSentLoadingMotdEvent: nativeSourcePlayer?.NativeSourceResponder.SentLoadingMotdEvent,
             NativeSourceSentRosterDescriptorState: nativeSourcePlayer?.NativeSourceResponder.SentRosterDescriptorState,
             NativeSourceSteadyStateLinkHeartbeatIndex: nativeSourcePlayer?.NativeSourceResponder.SteadyStateLinkHeartbeatIndex,
-            NativeSourceLastCommandSnapshotClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.LastCommandSnapshotClientPacketCount));
+            NativeSourceLastCommandSnapshotClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.LastCommandSnapshotClientPacketCount,
+            LocalPort: localPort));
     }
 
     private void RecordRawEvent(
@@ -687,9 +713,11 @@ public sealed class UdpGameManagerServer
         string hexPrefix,
         ReadOnlyMemory<byte> payload = default,
         Ps3SourceGameplayObservation? sourceObservation = null,
-        PlayerSession? nativeSourcePlayer = null)
+        PlayerSession? nativeSourcePlayer = null,
+        int? localPort = null)
     {
-        var sourceTransport = BuildSourceEventData(eventName, payload, sourceObservation);
+        var sourceTransport = BuildSourceEventData(eventName, payload, sourceObservation, nativeSourcePlayer);
+        var semanticContext = LatestNativeSourceSemanticContext(nativeSourcePlayer);
         _eventSink?.Record(new GameManagerServerEvent(
             DateTimeOffset.UtcNow,
             _profile.Name,
@@ -711,6 +739,7 @@ public sealed class UdpGameManagerServer
             SourceFragmentHeaderHex: sourceTransport.FragmentHeaderHex,
             SourcePayloadSemanticKind: sourceTransport.PayloadSemanticKind,
             SourcePayloadSemanticRole: sourceTransport.PayloadSemanticRole,
+            SourceNativeFieldSummary: sourceTransport.NativeFieldSummary,
             SourceCompactControlFamily: sourceTransport.CompactControlFamily,
             SourceCompactControlPrefixLength: sourceTransport.CompactControlPrefixLength,
             SourceCompactControlPrefixHex: sourceTransport.CompactControlPrefixHex,
@@ -783,6 +812,13 @@ public sealed class UdpGameManagerServer
             SourceClientCommandWeaponSlotHint: sourceTransport.ClientCommandWeaponSlotHint,
             SourceClientCommandTeamHint: sourceTransport.ClientCommandTeamHint,
             SourceClientCommandClassHint: sourceTransport.ClientCommandClassHint,
+            NativeSourceSemanticContextKind: semanticContext?.ContextKind,
+            NativeSourceSemanticContextDetail: semanticContext?.Detail,
+            NativeSourceSemanticContextPacketCount: semanticContext?.PacketCount,
+            NativeSourceSemanticContextSequence: semanticContext?.Sequence,
+            NativeSourceSemanticContextPayloadRole: semanticContext?.PayloadRole,
+            NativeSourceSemanticContextNativeFrameKind: semanticContext?.NativeFrameKind,
+            NativeSourceSemanticContextBodyHash: semanticContext?.BodyHash,
             NativeSourceClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.ClientPacketCount,
             NativeSourceServerPacketCount: nativeSourcePlayer?.NativeSourceResponder.ServerPacketCount,
             NativeSourceSentInitialSetup: nativeSourcePlayer?.NativeSourceResponder.SentInitialSetup,
@@ -802,13 +838,21 @@ public sealed class UdpGameManagerServer
             NativeSourceSentLoadingMotdEvent: nativeSourcePlayer?.NativeSourceResponder.SentLoadingMotdEvent,
             NativeSourceSentRosterDescriptorState: nativeSourcePlayer?.NativeSourceResponder.SentRosterDescriptorState,
             NativeSourceSteadyStateLinkHeartbeatIndex: nativeSourcePlayer?.NativeSourceResponder.SteadyStateLinkHeartbeatIndex,
-            NativeSourceLastCommandSnapshotClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.LastCommandSnapshotClientPacketCount));
+            NativeSourceLastCommandSnapshotClientPacketCount: nativeSourcePlayer?.NativeSourceResponder.LastCommandSnapshotClientPacketCount,
+            LocalPort: localPort));
+    }
+
+    private static Tf2SourceClientSemanticContextEntry? LatestNativeSourceSemanticContext(PlayerSession? player)
+    {
+        var history = player?.SourceState.NativeSourceSemanticContextHistory;
+        return history is { Count: > 0 } ? history[^1] : null;
     }
 
     private static SourceEventData BuildSourceEventData(
         string eventName,
         ReadOnlyMemory<byte> payload,
-        Ps3SourceGameplayObservation? observation)
+        Ps3SourceGameplayObservation? observation,
+        PlayerSession? nativeSourcePlayer)
     {
         if (observation is not null)
         {
@@ -822,24 +866,22 @@ public sealed class UdpGameManagerServer
             if (Ps3SourceTransportPacket.TryDecode(payload.Span, out var packet))
             {
                 nativeFrame = packet.ClassifyNativeFrame();
+                var semanticBody = observation.ReassembledFragmentBody ?? packet.Body;
                 payloadSemantic = observation.Direction == Ps3SourceGameplayDirection.ClientToServer
                     && observation.DirectionPacketCount == 1
-                    ? Ps3SourcePayloadSemantics.AnalyzeInitialClientHandoffProbe(packet.Body)
-                    : Ps3SourcePayloadSemantics.Analyze(packet.Body);
+                    ? Ps3SourcePayloadSemantics.AnalyzeInitialClientHandoffProbe(semanticBody)
+                    : Ps3SourcePayloadSemantics.Analyze(semanticBody);
                 embeddedObjectData = ExtractEmbeddedObjectEventData(
-                    packet.Body,
+                    semanticBody,
                     observation.Direction.ToString());
-                compactControlData = ExtractCompactControlEventData(packet.Body);
+                compactControlData = ExtractCompactControlEventData(semanticBody);
                 if (observation.Direction == Ps3SourceGameplayDirection.ClientToServer)
                 {
                     clientPayload = Ps3SourceClientPayloadClassifier.Classify(
                         packet,
                         observation.DirectionPacketCount,
                         observation.SequenceDeltaFromPreviousSameDirection);
-                    if (Ps3SourceClientCommandIntent.TryDecode(clientPayload, packet.Body, out var command))
-                    {
-                        clientCommand = command;
-                    }
+                    clientCommand = LatestNativeSourceClientCommand(nativeSourcePlayer, observation);
                 }
 
                 markerlessPayloadData = ExtractMarkerlessPayloadEventData(
@@ -851,7 +893,7 @@ public sealed class UdpGameManagerServer
                     embeddedObjectData,
                     compactControlData,
                     clientPayload,
-                    packet.Body);
+                    semanticBody);
             }
 
             return new SourceEventData(
@@ -936,7 +978,8 @@ public sealed class UdpGameManagerServer
                 ClientPayloadObjectFragmentIndex: clientPayload?.PayloadObjectFragmentIndex,
                 ClientPayloadObjectFragmentTotalCount: clientPayload?.PayloadObjectFragmentTotalCount,
                 ClientPayloadObjectFragmentPacketCounter: clientPayload?.PayloadObjectFragmentPacketCounter,
-                ClientPayloadObjectFragmentWrappedOrCompressed: clientPayload?.PayloadObjectFragmentWrappedOrCompressed);
+                ClientPayloadObjectFragmentWrappedOrCompressed: clientPayload?.PayloadObjectFragmentWrappedOrCompressed,
+                NativeFieldSummary: NormalizeNativeFieldSummary(payloadSemantic));
         }
 
         var fallback = DecodeSourceTransport(eventName, payload);
@@ -1023,7 +1066,38 @@ public sealed class UdpGameManagerServer
             ClientPayloadObjectFragmentIndex: fallback.ClientPayloadObjectFragmentIndex,
             ClientPayloadObjectFragmentTotalCount: fallback.ClientPayloadObjectFragmentTotalCount,
             ClientPayloadObjectFragmentPacketCounter: fallback.ClientPayloadObjectFragmentPacketCounter,
-            ClientPayloadObjectFragmentWrappedOrCompressed: fallback.ClientPayloadObjectFragmentWrappedOrCompressed);
+            ClientPayloadObjectFragmentWrappedOrCompressed: fallback.ClientPayloadObjectFragmentWrappedOrCompressed,
+            NativeFieldSummary: fallback.NativeFieldSummary);
+    }
+
+    private static Ps3SourceClientCommandIntent? LatestNativeSourceClientCommand(
+        PlayerSession? player,
+        Ps3SourceGameplayObservation observation)
+    {
+        if (player is null
+            || observation.Direction != Ps3SourceGameplayDirection.ClientToServer
+            || player.SourceState.NativeClientCommandHistory.Count == 0)
+        {
+            return null;
+        }
+
+        var latest = player.SourceState.NativeClientCommandHistory[^1];
+        if (latest.PacketCount != observation.DirectionPacketCount
+            || latest.Sequence != observation.Sequence)
+        {
+            return null;
+        }
+
+        return new Ps3SourceClientCommandIntent(
+            latest.ForwardMove,
+            latest.SideMove,
+            latest.UpMove,
+            latest.YawDelta,
+            latest.PitchDelta,
+            latest.Buttons,
+            latest.WeaponSlotHint,
+            latest.TeamHint,
+            latest.ClassHint);
     }
 
     private static Ps3SourceClientCommandIntent? DecodeSourceCommand(string eventName, ReadOnlyMemory<byte> payload)
@@ -1043,9 +1117,7 @@ public sealed class UdpGameManagerServer
             return null;
         }
 
-        return Ps3SourceClientCommandIntent.TryDecode(clientPayload, packet.Body, out var command)
-            ? command
-            : null;
+        return null;
     }
 
     private static DecodedSourceTransportEventData DecodeSourceTransport(string eventName, ReadOnlyMemory<byte> payload)
@@ -1146,7 +1218,15 @@ public sealed class UdpGameManagerServer
             ClientPayloadObjectFragmentIndex: clientPayload?.PayloadObjectFragmentIndex,
             ClientPayloadObjectFragmentTotalCount: clientPayload?.PayloadObjectFragmentTotalCount,
             ClientPayloadObjectFragmentPacketCounter: clientPayload?.PayloadObjectFragmentPacketCounter,
-            ClientPayloadObjectFragmentWrappedOrCompressed: clientPayload?.PayloadObjectFragmentWrappedOrCompressed);
+            ClientPayloadObjectFragmentWrappedOrCompressed: clientPayload?.PayloadObjectFragmentWrappedOrCompressed,
+            NativeFieldSummary: NormalizeNativeFieldSummary(payloadSemantic));
+    }
+
+    private static string? NormalizeNativeFieldSummary(Ps3SourcePayloadSemanticInfo? semantic)
+    {
+        return string.IsNullOrWhiteSpace(semantic?.NativeFieldSummary)
+            ? null
+            : semantic.NativeFieldSummary;
     }
 
     private static SourceCompactControlEventData ExtractCompactControlEventData(ReadOnlySpan<byte> body)
@@ -1442,7 +1522,8 @@ public sealed class UdpGameManagerServer
         int? ClientPayloadObjectFragmentIndex = null,
         int? ClientPayloadObjectFragmentTotalCount = null,
         long? ClientPayloadObjectFragmentPacketCounter = null,
-        bool? ClientPayloadObjectFragmentWrappedOrCompressed = null);
+        bool? ClientPayloadObjectFragmentWrappedOrCompressed = null,
+        string? NativeFieldSummary = null);
 
     private sealed record DecodedSourceTransportEventData(
         int? Sequence,
@@ -1511,7 +1592,8 @@ public sealed class UdpGameManagerServer
         int? ClientPayloadObjectFragmentIndex = null,
         int? ClientPayloadObjectFragmentTotalCount = null,
         long? ClientPayloadObjectFragmentPacketCounter = null,
-        bool? ClientPayloadObjectFragmentWrappedOrCompressed = null)
+        bool? ClientPayloadObjectFragmentWrappedOrCompressed = null,
+        string? NativeFieldSummary = null)
     {
         public static DecodedSourceTransportEventData Empty { get; } = new(
             null, null, null, null, null, null, null, null, null, null, null, null, null, null,

@@ -40,9 +40,9 @@ public static class Eatf2ServerDllNativeObligationReducer
             "Usercmd and physics simulation",
             "The server must decode PS3 usercmds, apply movement/view/button intent, and simulate player physics.",
             ["CBasePlayer::ProcessUsercmds", "CBasePlayer::PhysicsSimulate", "CTFPlayerMove", "PhysicsSimulate: %s bad movetype"],
-            ["Ps3SourceClientCommandIntent", "ApplyClientCommandIntent", "UpdateNativeMovementFlags", "MaxSpeed", "ApplyWorldRules", "Tf2MapMetadata", "Tf2MapEntityParser", "MapMetadataPath"],
+            ["Ps3SourceClientCommandIntent", "ApplyClientCommandIntent", "UpdateNativeMovementFlags", "MaxSpeed", "ApplyWorldRules", "ApplyMapBoundsCollision", "ApplyBrushVolumeRules", "ResolveSolidBrushCollisions", "InHurtVolume", "InSolidMapBrush", "Tf2MapMetadata", "Tf2MapEntityParser", "Tf2MapBrushVolume", "MapMetadataPath"],
             "partial",
-            ["Usercmd intent, speed clamping, jump/duck, ground flags, PS3-visible physics fields, and BSP entity metadata-backed spawn/world bounds are implemented, but brush collision, trigger touch, water volumes, ladders, and Source movement prediction are not complete."]),
+            ["Usercmd intent, speed clamping, jump/duck, ground flags, PS3-visible physics fields, BSP entity metadata-backed spawn/world bounds, origin-translated brush-volume touch state, enabled solid brush AABB push-out, and trigger_hurt damage are implemented, but water volumes, ladders, and exact Source movement prediction are not complete."]),
         new(
             "snapshot-sendtables",
             "PS3 native snapshot/sendtable publication",
@@ -121,8 +121,12 @@ public static class Eatf2ServerDllNativeObligationReducer
                 obligations.Length,
                 obligations.Count(static obligation => obligation.OfficialEvidencePresent),
                 obligations.Count(static obligation => obligation.ImplementationEvidencePresent),
+                obligations.Count(static obligation => obligation.ImplementationScaffolded),
+                obligations.Count(static obligation => obligation.LiveProofPresent),
                 obligations.Count(static obligation => obligation.NativeComplete),
                 incomplete.Length,
+                obligations.Count(static obligation => !obligation.NativeComplete && obligation.ImplementationScaffolded),
+                obligations.Count(static obligation => obligation.NativeCompletionBlockers.Length > 0),
                 missingOfficial.Length,
                 missingImplementation.Length),
             obligations,
@@ -130,7 +134,8 @@ public static class Eatf2ServerDllNativeObligationReducer
             missingOfficial,
             missingImplementation,
             [
-                "A partial obligation means the replacement has useful native scaffolding but still lacks official Source server semantics.",
+                "A partial obligation means the replacement has useful native scaffolding but still lacks official Source server semantics or live gameplay proof.",
+                "ImplementationScaffolded means all expected source markers are present. NativeComplete still requires the current status to be complete and the blocker list to be closed.",
                 "Do not treat the backend as native-complete until every obligation is complete and live RPCS3 reaches steady gameplay.",
                 "The next implementation focus should be the usercmd/physics and level-player-lifecycle obligations, because live failures are currently inside the Source handoff/load path."
             ]);
@@ -169,23 +174,64 @@ public static class Eatf2ServerDllNativeObligationReducer
             .ToArray();
         var officialPresent = missingOfficial.Length == 0;
         var implementationPresent = missingImplementation.Length == 0;
+        var implementationScaffolded = implementationPresent;
+        var liveProofPresent = string.Equals(definition.CurrentStatus, "complete", StringComparison.Ordinal);
+        var nativeCompletionBlockers = definition.KnownGaps
+            .Where(static gap => !string.IsNullOrWhiteSpace(gap))
+            .ToArray();
+        var completionStage = CompletionStage(definition.CurrentStatus, officialPresent, implementationPresent, nativeCompletionBlockers.Length);
         var nativeComplete = officialPresent
             && implementationPresent
-            && string.Equals(definition.CurrentStatus, "complete", StringComparison.Ordinal);
+            && liveProofPresent
+            && nativeCompletionBlockers.Length == 0;
 
         return new Eatf2ServerDllNativeObligation(
             definition.Id,
             definition.Name,
             definition.Requirement,
             definition.CurrentStatus,
+            completionStage,
             nativeComplete,
             officialPresent,
             implementationPresent,
+            implementationScaffolded,
+            liveProofPresent,
             officialMarkers,
             implementationMarkers,
             missingOfficial,
             missingImplementation,
-            definition.KnownGaps);
+            definition.KnownGaps,
+            nativeCompletionBlockers);
+    }
+
+    private static string CompletionStage(
+        string currentStatus,
+        bool officialPresent,
+        bool implementationPresent,
+        int nativeCompletionBlockerCount)
+    {
+        if (!officialPresent)
+        {
+            return "missing-official-evidence";
+        }
+
+        if (!implementationPresent)
+        {
+            return "missing-implementation-evidence";
+        }
+
+        if (string.Equals(currentStatus, "complete", StringComparison.Ordinal)
+            && nativeCompletionBlockerCount == 0)
+        {
+            return "native-complete";
+        }
+
+        if (nativeCompletionBlockerCount > 0)
+        {
+            return "implementation-scaffolded-blocked-by-native-semantics";
+        }
+
+        return "implementation-scaffolded-awaiting-live-proof";
     }
 
     private sealed record NativeObligationDefinition(
@@ -307,8 +353,12 @@ public sealed record Eatf2ServerDllNativeObligationSummary(
     int ObligationCount,
     int ObligationsWithOfficialEvidence,
     int ObligationsWithImplementationEvidence,
+    int ImplementationScaffoldedObligationCount,
+    int LiveProvenObligationCount,
     int NativeCompleteObligationCount,
     int IncompleteObligationCount,
+    int ObligationsStillNeedingLiveProofCount,
+    int ObligationsStillNeedingFullSimulationCount,
     int MissingOfficialMarkerCount,
     int MissingImplementationMarkerCount);
 
@@ -317,14 +367,18 @@ public sealed record Eatf2ServerDllNativeObligation(
     string Name,
     string Requirement,
     string CurrentImplementationStatus,
+    string CurrentCompletionStage,
     bool NativeComplete,
     bool OfficialEvidencePresent,
     bool ImplementationEvidencePresent,
+    bool ImplementationScaffolded,
+    bool LiveProofPresent,
     NativeObligationMarker[] OfficialMarkers,
     NativeObligationMarker[] ImplementationMarkers,
     string[] MissingOfficialMarkers,
     string[] MissingImplementationMarkers,
-    string[] KnownGaps);
+    string[] KnownGaps,
+    string[] NativeCompletionBlockers);
 
 public sealed record NativeObligationMarker(
     string Marker,

@@ -130,8 +130,8 @@ public static partial class Tf2Ps3SourceNativeTemplateDebtReducer
                     token.Groups["kind"].Value switch
                     {
                         "L" => "PlayerStateLink",
-                        "M" => "MixedBinary",
-                        _ => "HighEntropy"
+                        "M" => "NativeQueuedBoundary",
+                        _ => "NativeSnapshot"
                     },
                     int.Parse(token.Groups["length"].Value),
                     line);

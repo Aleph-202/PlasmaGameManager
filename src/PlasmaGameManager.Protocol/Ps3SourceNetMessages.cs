@@ -8,6 +8,7 @@ public static class Ps3SourceNetMessageConstants
     public const int MaxEdictBits = 11;
     public const int DeltaSizeBits = 20;
     public const int MaxStringTables = 32;
+    public const int StringTableMaxUserDataBits = 14;
     public const int MaxPlayerNameLength = 32;
     public const int MaxCustomFiles = 4;
 
@@ -129,6 +130,12 @@ public sealed record Ps3SourceSvcStringTableUpdate(
     int ChangedEntries,
     byte[] Data,
     int DataBitCount);
+
+public sealed record Ps3SourceStringTableEntry(
+    int Index,
+    string Value,
+    byte[] UserData,
+    int UserDataBitCount);
 
 public sealed record Ps3SourceNetSignonState(
     byte SignonState,
@@ -1003,6 +1010,82 @@ public static class Ps3SourceNetMessages
 
         writer.WriteUBitLong(checked((uint)message.DataBitCount), Ps3SourceNetMessageConstants.DeltaSizeBits);
         writer.WriteBits(message.Data, message.DataBitCount);
+        return writer.ToFrame();
+    }
+
+    public static Ps3SourceNetMessageFrame BuildStringTableUpdateDataFrame(
+        ushort maxEntries,
+        IReadOnlyList<Ps3SourceStringTableEntry> entries,
+        bool entriesAreCreated = true,
+        bool userDataFixedSize = false)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var writer = new Ps3SourceNetBitWriter();
+        var entryBits = Log2(maxEntries);
+        var lastEntry = -1;
+        foreach (var entry in entries)
+        {
+            ArgumentNullException.ThrowIfNull(entry.UserData);
+            if (entry.Index < 0 || entry.Index >= maxEntries)
+            {
+                throw new ArgumentOutOfRangeException(nameof(entries), $"String-table entry index {entry.Index} is outside 0..{maxEntries - 1}.");
+            }
+
+            if (entry.Index <= lastEntry)
+            {
+                throw new ArgumentException("String-table entries must be strictly increasing by index.", nameof(entries));
+            }
+
+            if (entry.UserDataBitCount < 0 || entry.UserDataBitCount > entry.UserData.Length * 8)
+            {
+                throw new ArgumentOutOfRangeException(nameof(entries), "String-table user-data bit count exceeds the supplied data.");
+            }
+
+            if (lastEntry + 1 == entry.Index)
+            {
+                writer.WriteOneBit(true);
+            }
+            else
+            {
+                writer.WriteOneBit(false);
+                writer.WriteUBitLong(checked((uint)entry.Index), entryBits);
+            }
+
+            writer.WriteOneBit(entriesAreCreated);
+            if (entriesAreCreated)
+            {
+                writer.WriteOneBit(false);
+                writer.WriteString(entry.Value);
+            }
+
+            if (entry.UserDataBitCount == 0)
+            {
+                writer.WriteOneBit(false);
+            }
+            else
+            {
+                writer.WriteOneBit(true);
+                if (userDataFixedSize)
+                {
+                    writer.WriteBits(entry.UserData, entry.UserDataBitCount);
+                }
+                else
+                {
+                    if ((entry.UserDataBitCount & 7) != 0)
+                    {
+                        throw new ArgumentException("Variable string-table user data must be byte-aligned.", nameof(entries));
+                    }
+
+                    var userDataByteCount = entry.UserDataBitCount >> 3;
+                    writer.WriteUBitLong(checked((uint)userDataByteCount), Ps3SourceNetMessageConstants.StringTableMaxUserDataBits);
+                    writer.WriteBits(entry.UserData, entry.UserDataBitCount);
+                }
+            }
+
+            lastEntry = entry.Index;
+        }
+
         return writer.ToFrame();
     }
 
@@ -1917,6 +2000,41 @@ public static class Ps3SourceNetMessages
 
         messageType = checked((int)value);
         return true;
+    }
+
+    public static string MessageTypeName(int messageType)
+    {
+        return messageType switch
+        {
+            Ps3SourceNetMessageConstants.NetTick => "NET_Tick",
+            Ps3SourceNetMessageConstants.NetStringCmd => "NET_StringCmd",
+            Ps3SourceNetMessageConstants.NetSetConVar => "NET_SetConVar",
+            Ps3SourceNetMessageConstants.NetSignonState => "NET_SignonState",
+            Ps3SourceNetMessageConstants.SvcPrint => "SVC_Print",
+            Ps3SourceNetMessageConstants.SvcServerInfo => "SVC_ServerInfo",
+            Ps3SourceNetMessageConstants.SvcSendTable => "SVC_SendTable",
+            Ps3SourceNetMessageConstants.SvcClassInfo => "SVC_ClassInfo",
+            Ps3SourceNetMessageConstants.SvcSetPause => "SVC_SetPause",
+            Ps3SourceNetMessageConstants.SvcCreateStringTable => "SVC_CreateStringTable",
+            Ps3SourceNetMessageConstants.SvcUpdateStringTable => "SVC_UpdateStringTable",
+            Ps3SourceNetMessageConstants.SvcVoiceInit => "SVC_VoiceInit",
+            Ps3SourceNetMessageConstants.SvcVoiceData => "SVC_VoiceData",
+            Ps3SourceNetMessageConstants.SvcSounds => "SVC_Sounds",
+            Ps3SourceNetMessageConstants.SvcSetView => "SVC_SetView",
+            Ps3SourceNetMessageConstants.SvcFixAngle => "SVC_FixAngle",
+            Ps3SourceNetMessageConstants.SvcCrosshairAngle => "SVC_CrosshairAngle",
+            Ps3SourceNetMessageConstants.SvcBspDecal => "SVC_BspDecal",
+            Ps3SourceNetMessageConstants.SvcUserMessage => "SVC_UserMessage",
+            Ps3SourceNetMessageConstants.SvcEntityMessage => "SVC_EntityMessage",
+            Ps3SourceNetMessageConstants.SvcGameEvent => "SVC_GameEvent",
+            Ps3SourceNetMessageConstants.SvcPacketEntities => "SVC_PacketEntities",
+            Ps3SourceNetMessageConstants.SvcTempEntities => "SVC_TempEntities",
+            Ps3SourceNetMessageConstants.SvcPrefetch => "SVC_Prefetch",
+            Ps3SourceNetMessageConstants.SvcMenu => "SVC_Menu",
+            Ps3SourceNetMessageConstants.SvcGameEventList => "SVC_GameEventList",
+            Ps3SourceNetMessageConstants.SvcGetCvarValue => "SVC_GetCvarValue",
+            _ => $"message-{messageType}"
+        };
     }
 
     private static bool TryReadExpectedMessageType(

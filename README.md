@@ -25,6 +25,7 @@ This repository is currently aimed at TF2 PS3 research and local RPCS3 testing. 
 - Arcadia, preferably this build: [FridiNaTor1/arcadia](https://github.com/FridiNaTor1/arcadia).
 - RPCS3 with network/RPCN support enabled for local testing.
 - No external Source server is required for the default live stack. `Source-Server/` may still be used as a private legacy workspace, but the generated native responder is the active target.
+- An extracted TF2 PS3 content tree is required for real generated/native map-load testing. Set `TF2PS3_SOURCE_CONTENT_ROOT` to the extracted `GAME/TF`-style tree that contains maps, resources, scripts, materials, models, and sounds. Diagnostic runs without content require `TF2PS3_ALLOW_MISSING_SOURCE_CONTENT=1`.
 
 The local development machine uses:
 
@@ -32,10 +33,10 @@ The local development machine uses:
 dotnet
 ```
 
-If your SDK is somewhere else, set `DOTNET` when running scripts:
+If your SDK is somewhere else, set `TF2PS3_DOTNET` or `DOTNET` when running scripts. The live stack also checks `$HOME/.dotnet/dotnet` automatically.
 
 ```sh
-DOTNET=/path/to/dotnet ./run-rpcs3-live-stack.sh --check
+TF2PS3_DOTNET="$HOME/.dotnet/dotnet" ./run-rpcs3-live-stack.sh --check
 ```
 
 ## Repository Layout
@@ -84,13 +85,13 @@ arcadia/src/server/Arcadia.csproj
 Check the stack:
 
 ```sh
-./run-rpcs3-live-stack.sh --check
+TF2PS3_SOURCE_CONTENT_ROOT=/path/to/TF2PS3/GAME/TF ./run-rpcs3-live-stack.sh --check
 ```
 
 Start Arcadia and PlasmaGameManager together. PlasmaGameManager uses its embedded generated native Source responder by default:
 
 ```sh
-./run-rpcs3-live-stack.sh
+TF2PS3_SOURCE_CONTENT_ROOT=/path/to/TF2PS3/GAME/TF ./run-rpcs3-live-stack.sh
 ```
 
 Defaults:
@@ -116,6 +117,7 @@ TF2PS3_SOURCE_PORT=27016 \
 TF2PS3_DEDICATED_MAP=cp_dustbowl \
 TF2PS3_DEDICATED_HOSTNAME=TF2PS3 \
 TF2PS3_DEDICATED_MAX_PLAYERS=16 \
+TF2PS3_SOURCE_CONTENT_ROOT=/path/to/TF2PS3/GAME/TF \
 ./run-rpcs3-live-stack.sh
 ```
 
@@ -166,6 +168,7 @@ dotnet run --project src/PlasmaGameManager.Server/PlasmaGameManager.Server.cspro
   --source-host 127.0.0.1 \
   --source-port 27016 \
   --source-protocol ps3-native-generated \
+  --tf2-source-content-root /path/to/TF2PS3/GAME/TF \
   --evidence-log artifacts/live-stack/live-gamemanager-events.jsonl
 ```
 
@@ -195,5 +198,5 @@ theater.ps3.arcadia=192.168.1.50&&hl2-ps3.fesl.ea.com=192.168.1.50&&messaging.ea
 
 - Arcadia owns FESL/Theater/login and server advertisement.
 - PlasmaGameManager owns the PS3 GameManager UDP session.
-- PlasmaGameManager owns the PS3 GameManager UDP session and the current generated native Source gameplay path.
+- PlasmaGameManager also owns the current generated native Source gameplay path.
 - The public repository intentionally excludes private reverse-engineering notes, local test scripts, PCAPs, binaries, and private Source-server work.

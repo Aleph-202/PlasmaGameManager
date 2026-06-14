@@ -2,7 +2,14 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-DOTNET=
+DOTNET=${TF2PS3_DOTNET:-${DOTNET:-}}
+if [ -z "$DOTNET" ]; then
+	if [ -n "${HOME:-}" ] && [ -x "$HOME/.dotnet/dotnet" ]; then
+		DOTNET="$HOME/.dotnet/dotnet"
+	elif command -v dotnet >/dev/null 2>&1; then
+		DOTNET=$(command -v dotnet)
+	fi
+fi
 PYTHON=${PYTHON:-python3}
 
 ARCADIA_ROOT=${ARCADIA_ROOT:-"$ROOT/arcadia"}
@@ -79,6 +86,12 @@ fi
 
 LOG_DIR=${TF2PS3_STACK_LOG_DIR:-"$ROOT/artifacts/live-stack"}
 TF2PS3_MAP_METADATA=${TF2PS3_MAP_METADATA:-"$ROOT/artifacts/tf2ps3-map-metadata.json"}
+TF2PS3_SOURCE_CONTENT_ROOT=${TF2PS3_SOURCE_CONTENT_ROOT:-}
+if [ -z "$TF2PS3_SOURCE_CONTENT_ROOT" ] && [ -d "$ROOT/.local/input/TF2PS3/GAME/TF" ]; then
+	TF2PS3_SOURCE_CONTENT_ROOT="$ROOT/.local/input/TF2PS3/GAME/TF"
+fi
+TF2PS3_MAP_ROOT=${TF2PS3_MAP_ROOT:-$TF2PS3_SOURCE_CONTENT_ROOT}
+TF2PS3_ALLOW_MISSING_SOURCE_CONTENT=${TF2PS3_ALLOW_MISSING_SOURCE_CONTENT:-0}
 PLASMA_EVIDENCE_LOG=${PLASMA_EVIDENCE_LOG:-"$LOG_DIR/live-gamemanager-events.jsonl"}
 ARCADIA_LOG="$LOG_DIR/arcadia.log"
 SOURCE_LOG="$LOG_DIR/source-server.log"
@@ -134,6 +147,8 @@ Useful overrides:
     omitted by default; the launcher writes $LOG_DIR/stack-source-profile.json from the selected stack settings
   TF2PS3_NET_TRACE=1
   TF2PS3_CAPTURE_IDENTITY=1
+  TF2PS3_DOTNET=/path/to/dotnet
+  DOTNET=/path/to/dotnet
   PLASMA_CONTROL_BIND=127.0.0.1
   PLASMA_CONTROL_PORT=27017
   PLASMA_CONTROL_USER=FridiNaTor
@@ -143,6 +158,9 @@ Useful overrides:
   PLASMA_PANEL_ENABLED=1
   TF2PS3_STACK_LOG_DIR=$ROOT/artifacts/live-stack
   TF2PS3_MAP_METADATA=$ROOT/artifacts/tf2ps3-map-metadata.json
+  TF2PS3_SOURCE_CONTENT_ROOT=$ROOT/.local/input/TF2PS3/GAME/TF
+  TF2PS3_MAP_ROOT=/path/to/PS3/GAME/TF/MAPS
+  TF2PS3_ALLOW_MISSING_SOURCE_CONTENT=0
 EOF
 }
 
@@ -191,13 +209,13 @@ write_live_stack_summary() {
 		return 0
 	fi
 
-	"$PYTHON" - "$ARCADIA_LOG" "$PLASMA_EVIDENCE_LOG" "$SOURCE_LOG" "$SOURCE_REPLAY_LOG" "$PUBLIC_DROP_LOG" "$SUMMARY_LOG" <<'PY'
+	"$PYTHON" - "$ARCADIA_LOG" "$PLASMA_EVIDENCE_LOG" "$SOURCE_LOG" "$SOURCE_REPLAY_LOG" "$PUBLIC_DROP_LOG" "$SUMMARY_LOG" "$PLASMA_LOG" <<'PY'
 import json
 import os
 import sys
 from collections import Counter
 
-arcadia_log, evidence_log, source_log, replay_log, public_log, summary_log = sys.argv[1:]
+arcadia_log, evidence_log, source_log, replay_log, public_log, summary_log, plasma_log = sys.argv[1:]
 
 def read_text(path):
     try:
@@ -213,6 +231,7 @@ arcadia = read_text(arcadia_log)
 source = read_text(source_log)
 public = read_text(public_log)
 replay = read_text(replay_log)
+plasma = read_text(plasma_log)
 fesl_connections = count_contains(arcadia, "Opening connection from")
 ps3_login_requests = count_contains(arcadia, "'acct' incoming:TXN=PS3Login")
 quick_match_starts = count_contains(arcadia, "'pnow' incoming:TXN=Start")
@@ -224,8 +243,18 @@ close_game_requests = count_contains(arcadia, "'ECNL' incoming:")
 events = []
 event_counts = Counter()
 source_roles = Counter()
+source_local_ports = Counter()
 last_event = ""
 last_source_event = ""
+generated_terminal_bootstrap = 0
+generated_steady_gameplay = 0
+max_generated_source_payload = 0
+oversized_generated_source_payloads = 0
+responder_label = ""
+for line in plasma.splitlines():
+    marker = "PS3-native Source responder="
+    if marker in line:
+        responder_label = line.split(marker, 1)[1].strip()
 if os.path.exists(evidence_log):
     with open(evidence_log, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -245,6 +274,22 @@ if os.path.exists(evidence_log):
                 role = event.get("SourcePayloadSemanticRole")
                 if role:
                     source_roles[str(role)] += 1
+                local_port = event.get("LocalPort")
+                if local_port is not None:
+                    source_local_ports[str(local_port)] += 1
+            if name == "source-generated-send":
+                explanation = str(event.get("Explanation", ""))
+                try:
+                    payload_length = int(event.get("PayloadLength", 0) or 0)
+                except (TypeError, ValueError):
+                    payload_length = 0
+                max_generated_source_payload = max(max_generated_source_payload, payload_length)
+                if payload_length > 1002:
+                    oversized_generated_source_payloads += 1
+                if "terminal map-load object-stream bootstrap" in explanation:
+                    generated_terminal_bootstrap += 1
+                if "steady" in explanation.lower() or "steady" in str(role or "").lower():
+                    generated_steady_gameplay += 1
 
 lines = [
     "TF2 PS3 live stack summary",
@@ -264,12 +309,18 @@ lines = [
     f"  close-game requests: {close_game_requests}",
     "",
     "GameManager/native Source:",
+    f"  responder: {responder_label or 'not observed in plasma log'}",
     f"  total events: {len(events)}",
     f"  handoff events: {event_counts['source-handoff']}",
     f"  source traffic events: {event_counts['source-traffic']}",
-    f"  generated sends: {event_counts['source-generated-send']}",
+    f"  native generated Source sends: {event_counts['source-generated-send']}",
+    f"  terminal map-load bootstraps: {generated_terminal_bootstrap}",
+    f"  generated steady gameplay sends: {generated_steady_gameplay}",
+    f"  max generated Source payload: {max_generated_source_payload}",
+    f"  oversized generated Source payloads (>1002): {oversized_generated_source_payloads}",
     f"  generated drops: {event_counts['source-generated-drop']}",
-    f"  source sends: {event_counts['source-send']}",
+    f"  connectionless/query Source sends: {event_counts['source-send']}",
+    f"  Source local ports: {', '.join(f'{port}:{count}' for port, count in source_local_ports.most_common()) or 'none'}",
     f"  last event: {last_event}",
     f"  last source event: {last_source_event}",
     "",
@@ -626,6 +677,15 @@ check_layout() {
 					check_executable "$SOURCE_SERVER_ROOT/tools/run_tf2ps3_dedicated.sh" "Source server launcher" || status=1
 					;;
 				generated)
+					if [ "$TF2PS3_ALLOW_MISSING_SOURCE_CONTENT" != "1" ]; then
+						if [ -z "$TF2PS3_SOURCE_CONTENT_ROOT" ]; then
+							echo "missing TF2PS3_SOURCE_CONTENT_ROOT: generated native Source map-load testing requires an extracted PS3 TF content tree" >&2
+							status=1
+						elif [ ! -d "$TF2PS3_SOURCE_CONTENT_ROOT" ]; then
+							echo "missing TF2PS3_SOURCE_CONTENT_ROOT directory: $TF2PS3_SOURCE_CONTENT_ROOT" >&2
+							status=1
+						fi
+					fi
 					;;
 				*)
 					echo "unsupported TF2PS3_SOURCE_BACKEND=$SOURCE_BACKEND; use generated, replay, or srcds" >&2
@@ -680,6 +740,12 @@ check_layout() {
 			echo "map metadata:  $TF2PS3_MAP_METADATA"
 		else
 			echo "map metadata:  not found; generated map defaults will be used"
+		fi
+		if [ -n "$TF2PS3_SOURCE_CONTENT_ROOT" ]; then
+			echo "source content:$TF2PS3_SOURCE_CONTENT_ROOT"
+			echo "map root:      $TF2PS3_MAP_ROOT"
+		else
+			echo "source content:not set; generated mode requires this unless TF2PS3_ALLOW_MISSING_SOURCE_CONTENT=1"
 		fi
 		if [ -n "$SOURCE_LAUNCH_PROFILE" ]; then
 			echo "source profile: $SOURCE_LAUNCH_PROFILE"
@@ -933,6 +999,8 @@ echo "starting PlasmaGameManager on $GAME_HOST:$PLASMA_LISTEN_PORTS -> source $S
 	cd "$ROOT"
 	PLASMA_PROFILE="${PLASMA_PROFILE:-tf2-ps3}" \
 	PLASMA_TF2_MAP_METADATA="$([ -f "$TF2PS3_MAP_METADATA" ] && printf '%s' "$TF2PS3_MAP_METADATA" || true)" \
+	PLASMA_TF2_SOURCE_CONTENT_ROOT="$TF2PS3_SOURCE_CONTENT_ROOT" \
+	PLASMA_TF2_MAP_ROOT="$TF2PS3_MAP_ROOT" \
 	PLASMA_SOURCE_PROXY="$([ "$SOURCE_BACKEND" = "generated" ] && echo 0 || echo 1)" \
 	PLASMA_SOURCE_PROTOCOL="$PLASMA_SOURCE_PROTOCOL_EFFECTIVE" \
 	PLASMA_SOURCE_LAUNCH_PROFILE="$SOURCE_LAUNCH_PROFILE" \
@@ -954,6 +1022,7 @@ echo "starting PlasmaGameManager on $GAME_HOST:$PLASMA_LISTEN_PORTS -> source $S
 		--source-launch-profile "$SOURCE_LAUNCH_PROFILE" \
 		--source-launch-profile-glob "$ARCADIA_SOURCE_PROFILE_PATH" \
 		--tf2-ranked-stats-export "$TF2_RANKED_STATS_LOG" \
+		--tf2-source-content-root "$TF2PS3_SOURCE_CONTENT_ROOT" \
 		--control-bind "$PLASMA_CONTROL_BIND" \
 		--control-port "$PLASMA_CONTROL_PORT" \
 		--control-user "$PLASMA_CONTROL_USER" \

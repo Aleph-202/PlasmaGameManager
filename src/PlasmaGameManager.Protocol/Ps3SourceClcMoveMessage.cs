@@ -11,7 +11,9 @@ public sealed record Ps3SourceClcMoveMessage(
     int TotalBitsConsumed)
 {
     public const int ClcMoveMessageType = 9;
-    public const int NetMessageTypeBits = 6;
+    // TF.elf's CNetChan dispatcher and CLC_Move writer use the PS3 five-bit
+    // message id contract, not the newer PC Source NETMSG_TYPE_BITS=6 value.
+    public const int NetMessageTypeBits = Ps3SourceNetMessageConstants.NetMessageTypeBits;
     public const int NewCommandBits = 4;
     public const int BackupCommandBits = 3;
     public const int CommandDataLengthBits = 16;

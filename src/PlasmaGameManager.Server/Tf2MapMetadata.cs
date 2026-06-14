@@ -9,7 +9,8 @@ public sealed record Tf2MapMetadata(
     IReadOnlyList<Tf2MapSpawnPoint> SpawnPoints,
     IReadOnlyList<Tf2MapFlag> Flags,
     IReadOnlyList<Tf2MapControlPoint> ControlPoints,
-    IReadOnlyList<Tf2MapCaptureArea> CaptureAreas);
+    IReadOnlyList<Tf2MapCaptureArea> CaptureAreas,
+    IReadOnlyList<Tf2MapBrushVolume> BrushVolumes);
 
 public sealed record Tf2MapBounds(
     float MinX,
@@ -18,6 +19,31 @@ public sealed record Tf2MapBounds(
     float MaxX,
     float MaxY,
     float MaxZ);
+
+public sealed record Tf2MapBrushVolume(
+    string ClassName,
+    string TargetName,
+    string ModelName,
+    uint TeamNumber,
+    string AssociatedTargetName,
+    Tf2MapBounds Bounds,
+    bool Enabled = true,
+    int SpawnFlags = 0,
+    int Solidity = 0,
+    float Damage = 0,
+    float DamageCap = 0,
+    int DamageType = 0)
+{
+    public bool Contains(float x, float y, float z)
+    {
+        return x >= Bounds.MinX
+            && x <= Bounds.MaxX
+            && y >= Bounds.MinY
+            && y <= Bounds.MaxY
+            && z >= Bounds.MinZ
+            && z <= Bounds.MaxZ;
+    }
+}
 
 public sealed record Tf2MapSpawnPoint(
     uint TeamNumber,
@@ -89,7 +115,7 @@ public sealed class Tf2MapMetadataCatalog
         var maps = document.RootElement.ValueKind == JsonValueKind.Array
             ? JsonSerializer.Deserialize<Tf2MapMetadata[]>(json, options) ?? []
             : JsonSerializer.Deserialize<Tf2MapMetadataCatalogDocument>(json, options)?.Maps ?? [];
-        return new Tf2MapMetadataCatalog(maps);
+        return new Tf2MapMetadataCatalog(maps.Select(Normalize));
     }
 
     public Tf2MapMetadata? Find(string mapName)
@@ -116,11 +142,26 @@ public sealed class Tf2MapMetadataCatalog
     }
 
     private sealed record Tf2MapMetadataCatalogDocument(Tf2MapMetadata[] Maps);
+
+    private static Tf2MapMetadata Normalize(Tf2MapMetadata map)
+    {
+        return map with
+        {
+            SpawnPoints = map.SpawnPoints ?? [],
+            Flags = map.Flags ?? [],
+            ControlPoints = map.ControlPoints ?? [],
+            CaptureAreas = map.CaptureAreas ?? [],
+            BrushVolumes = map.BrushVolumes ?? []
+        };
+    }
 }
 
 public static class Tf2MapEntityParser
 {
-    public static Tf2MapMetadata ParseEntityText(string mapName, string entityText)
+    public static Tf2MapMetadata ParseEntityText(
+        string mapName,
+        string entityText,
+        IReadOnlyDictionary<int, Tf2MapBounds>? modelBounds = null)
     {
         var entities = ParseEntities(entityText).ToArray();
         var bounds = ParseBounds(entities);
@@ -154,7 +195,17 @@ public static class Tf2MapEntityParser
             .Where(static area => area is not null)
             .Cast<Tf2MapCaptureArea>()
             .ToArray();
-        return new Tf2MapMetadata(mapName, bounds, spawns, flags, controlPoints, captureAreas);
+        var brushVolumes = modelBounds is null
+            ? []
+            : entities
+                .Select(entity => ParseBrushVolume(entity, modelBounds))
+                .Where(static volume => volume is not null)
+                .Cast<Tf2MapBrushVolume>()
+                .OrderBy(static volume => volume.ClassName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(static volume => volume.TargetName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(static volume => volume.ModelName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        return new Tf2MapMetadata(mapName, bounds, spawns, flags, controlPoints, captureAreas, brushVolumes);
     }
 
     private static IEnumerable<Dictionary<string, string>> ParseEntities(string entityText)
@@ -333,6 +384,67 @@ public static class Tf2MapEntityParser
             entity.GetValueOrDefault("targetname") ?? "");
     }
 
+    private static Tf2MapBrushVolume? ParseBrushVolume(
+        Dictionary<string, string> entity,
+        IReadOnlyDictionary<int, Tf2MapBounds> modelBounds)
+    {
+        var className = entity.GetValueOrDefault("classname") ?? "";
+        if (!IsBrushVolumeClass(className)
+            || !TryModelIndex(entity.GetValueOrDefault("model"), out var modelIndex)
+            || !modelBounds.TryGetValue(modelIndex, out var bounds))
+        {
+            return null;
+        }
+
+        return new Tf2MapBrushVolume(
+            className,
+            entity.GetValueOrDefault("targetname") ?? "",
+            $"*{modelIndex}",
+            ParseTeam(entity.GetValueOrDefault("TeamNum") ?? entity.GetValueOrDefault("team_no") ?? entity.GetValueOrDefault("teamnum")),
+            entity.GetValueOrDefault("area_cap_point")
+                ?? entity.GetValueOrDefault("filtername")
+                ?? entity.GetValueOrDefault("target")
+                ?? "",
+            TranslateBounds(bounds, entity.GetValueOrDefault("origin")),
+            !string.Equals(entity.GetValueOrDefault("StartDisabled"), "1", StringComparison.Ordinal),
+            ParseInt(entity.GetValueOrDefault("spawnflags"), 0),
+            ParseInt(entity.GetValueOrDefault("solidity"), 0),
+            ParseFloat(entity.GetValueOrDefault("damage"), 0.0f),
+            ParseFloat(entity.GetValueOrDefault("damagecap"), 0.0f),
+            ParseInt(entity.GetValueOrDefault("damagetype"), 0));
+    }
+
+    private static Tf2MapBounds TranslateBounds(Tf2MapBounds bounds, string? originText)
+    {
+        if (!TryVector(originText, out var origin))
+        {
+            return bounds;
+        }
+
+        return new Tf2MapBounds(
+            bounds.MinX + origin.X,
+            bounds.MinY + origin.Y,
+            bounds.MinZ + origin.Z,
+            bounds.MaxX + origin.X,
+            bounds.MaxY + origin.Y,
+            bounds.MaxZ + origin.Z);
+    }
+
+    private static bool IsBrushVolumeClass(string className)
+    {
+        return className.StartsWith("trigger_", StringComparison.OrdinalIgnoreCase)
+            || className.StartsWith("func_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryModelIndex(string? value, out int modelIndex)
+    {
+        modelIndex = 0;
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Length > 1
+            && value[0] == '*'
+            && int.TryParse(value.AsSpan(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out modelIndex);
+    }
+
     private static bool IsClass(Dictionary<string, string> entity, string className)
     {
         return string.Equals(entity.GetValueOrDefault("classname"), className, StringComparison.OrdinalIgnoreCase);
@@ -346,6 +458,13 @@ public static class Tf2MapEntityParser
     private static uint ParseUInt(string? value, uint fallback)
     {
         return uint.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : fallback;
+    }
+
+    private static int ParseInt(string? value, int fallback)
+    {
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : fallback;
     }

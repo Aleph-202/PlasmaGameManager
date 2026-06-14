@@ -58,7 +58,10 @@ public sealed class Ps3SourceGameplaySession
         state.LastSequence = packet.CandidateSequence;
         state.LastBodyLength = packet.Body.Length;
         state.ShapeCounts[shape] = state.ShapeCounts.GetValueOrDefault(shape) + 1;
-        TrackEmbeddedObjects(state, packet.Body);
+        var semanticBody = TryReassembleFragment(state, packet.Body, out var reassembledBody)
+            ? reassembledBody
+            : packet.Body;
+        TrackEmbeddedObjects(state, semanticBody);
         if (sequenceDecrease)
         {
             state.SequenceDecreaseCount++;
@@ -76,7 +79,8 @@ public sealed class Ps3SourceGameplaySession
             Math.Round(Entropy(packet.Body), 3),
             sequenceDecrease,
             sequenceWrap,
-            state.PacketCount);
+            state.PacketCount,
+            ReassembledFragmentBody: reassembledBody);
     }
 
     public Ps3SourceGameplayDirectionState GetState(Ps3SourceGameplayDirection direction)
@@ -168,6 +172,69 @@ public sealed class Ps3SourceGameplaySession
         }
     }
 
+    private static bool TryReassembleFragment(
+        Ps3SourceGameplayDirectionState state,
+        ReadOnlySpan<byte> body,
+        out byte[]? reassembledBody)
+    {
+        reassembledBody = null;
+        if (!Ps3SourceFragmentHeader.TryDecode(body, out var header))
+        {
+            state.PendingFragmentBaseCounter = null;
+            state.PendingFragmentTotalCount = 0;
+            state.PendingFragmentWrappedOrCompressed = false;
+            state.PendingFragments.Clear();
+            return false;
+        }
+
+        var groupBaseCounter = header.PacketCounter - header.FragmentIndex;
+        if (state.PendingFragmentBaseCounter != groupBaseCounter
+            || state.PendingFragmentTotalCount != header.TotalCount
+            || state.PendingFragmentWrappedOrCompressed != header.WrappedOrCompressed)
+        {
+            state.PendingFragmentBaseCounter = groupBaseCounter;
+            state.PendingFragmentTotalCount = header.TotalCount;
+            state.PendingFragmentWrappedOrCompressed = header.WrappedOrCompressed;
+            state.PendingFragments.Clear();
+        }
+
+        state.PendingFragments[header.FragmentIndex] = body[Ps3SourceFragmentHeader.HeaderBytes..].ToArray();
+        if (state.PendingFragments.Count != header.TotalCount)
+        {
+            return false;
+        }
+
+        var payloadLength = 0;
+        for (var index = 0; index < header.TotalCount; index++)
+        {
+            if (!state.PendingFragments.TryGetValue(checked((byte)index), out var fragment))
+            {
+                return false;
+            }
+
+            payloadLength += fragment.Length;
+        }
+
+        var combined = new byte[payloadLength];
+        var offset = 0;
+        for (var index = 0; index < header.TotalCount; index++)
+        {
+            var fragment = state.PendingFragments[checked((byte)index)];
+            fragment.CopyTo(combined.AsSpan(offset));
+            offset += fragment.Length;
+        }
+
+        state.PendingFragmentBaseCounter = null;
+        state.PendingFragmentTotalCount = 0;
+        state.PendingFragmentWrappedOrCompressed = false;
+        state.PendingFragments.Clear();
+
+        reassembledBody = header.WrappedOrCompressed && Ps3SourceLzss.TryDecode(combined, out var decoded)
+            ? decoded
+            : combined;
+        return true;
+    }
+
     private static void Increment(Dictionary<string, int> counts, string value)
     {
         counts[value] = counts.GetValueOrDefault(value) + 1;
@@ -241,7 +308,8 @@ public sealed record Ps3SourceGameplayObservation(
     double BodyEntropy,
     bool SequenceDecrease,
     bool SequenceWrap,
-    int DirectionPacketCount);
+    int DirectionPacketCount,
+    byte[]? ReassembledFragmentBody = null);
 
 public sealed class Ps3SourceGameplayDirectionState
 {
@@ -269,6 +337,14 @@ public sealed class Ps3SourceGameplayDirectionState
     public Dictionary<string, int> EmbeddedDisplayNameCounts { get; } = new(StringComparer.Ordinal);
 
     public Dictionary<string, int> EmbeddedClassIdCounts { get; } = new(StringComparer.Ordinal);
+
+    public uint? PendingFragmentBaseCounter { get; set; }
+
+    public byte PendingFragmentTotalCount { get; set; }
+
+    public bool PendingFragmentWrappedOrCompressed { get; set; }
+
+    public Dictionary<byte, byte[]> PendingFragments { get; } = new();
 }
 
 public sealed record Ps3SourceGameplaySummary(

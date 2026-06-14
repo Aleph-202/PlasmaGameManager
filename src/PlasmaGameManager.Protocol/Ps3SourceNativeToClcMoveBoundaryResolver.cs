@@ -5,7 +5,11 @@ public enum Ps3SourceNativeToClcMoveBoundaryKind
     DirectRawBody,
     AttachedType2RawBody,
     BitSidecar,
-    PayloadObjectInnerPayload
+    PayloadObjectInnerPayload,
+    OwnerSlot8Bitstream,
+    OwnerForwarderWord6Bitstream,
+    OwnerForwarderDeferredPointerWord6Bitstream,
+    OwnerForwarderConfigFallbackWord4Bitstream
 }
 
 public sealed record Ps3SourceNativeToClcMoveBoundary(
@@ -26,8 +30,23 @@ public static class Ps3SourceNativeToClcMoveBoundaryResolver
         boundary = default!;
         return TryResolveBitSidecar(payloadInfo, body, out boundary)
             || TryResolveAttachedType2RawBody(payloadInfo, body, out boundary)
-            || TryResolvePayloadObjectInnerPayload(payloadInfo, body, out boundary)
-            || TryResolveDirectRawBody(payloadInfo, body, out boundary);
+            || TryResolveOwnerSlot8Bitstream(payloadInfo, body, out boundary)
+            || TryResolveOwnerForwarderBitstream(
+                body,
+                Ps3SourceOwnerForwarderBitstreamLayout.Word6PayloadWord7ReaderWord16,
+                Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderWord6Bitstream,
+                out boundary)
+            || TryResolveOwnerForwarderBitstream(
+                body,
+                Ps3SourceOwnerForwarderBitstreamLayout.DeferredPointerWord6PayloadWord10PointerWord19,
+                Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderDeferredPointerWord6Bitstream,
+                out boundary)
+            || TryResolveOwnerForwarderBitstream(
+                body,
+                Ps3SourceOwnerForwarderBitstreamLayout.ConfigFallbackWord4PayloadWord5ReaderWord14,
+                Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderConfigFallbackWord4Bitstream,
+                out boundary)
+            || TryResolvePayloadObjectInnerPayload(payloadInfo, body, out boundary);
     }
 
     private static bool TryResolveBitSidecar(
@@ -36,21 +55,40 @@ public static class Ps3SourceNativeToClcMoveBoundaryResolver
         out Ps3SourceNativeToClcMoveBoundary boundary)
     {
         boundary = default!;
-        if (payloadInfo.BitSidecarOffset is not { } offset
-            || !Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
-            || bitCount == 0)
+        if (payloadInfo.BitSidecarOffset is { } offset
+            && TryResolveBitSidecarAtOffset(body, offset, out boundary))
         {
-            return false;
+            return true;
         }
 
-        return TryDecodeClcMovePayload(
-            bitPayload,
-            bitCount,
-            Ps3SourceNativeToClcMoveBoundaryKind.BitSidecar,
-            offset + Ps3SourceSendWrapper.BitSidecarCountBytes,
-            bitPayload.Length,
-            requireExactBitCount: true,
-            out boundary);
+        foreach (var candidate in Ps3SourceBitSidecarFrame.DetectAll(body))
+        {
+            if (candidate.Offset != payloadInfo.BitSidecarOffset
+                && TryResolveBitSidecarAtOffset(body, candidate.Offset, out boundary))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveBitSidecarAtOffset(
+        ReadOnlySpan<byte> body,
+        int offset,
+        out Ps3SourceNativeToClcMoveBoundary boundary)
+    {
+        boundary = default!;
+        return Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
+            && bitCount != 0
+            && TryDecodeClcMovePayload(
+                bitPayload,
+                bitCount,
+                Ps3SourceNativeToClcMoveBoundaryKind.BitSidecar,
+                offset + Ps3SourceSendWrapper.BitSidecarCountBytes,
+                bitPayload.Length,
+                requireExactBitCount: true,
+                out boundary);
     }
 
     private static bool TryResolveAttachedType2RawBody(
@@ -137,6 +175,61 @@ public static class Ps3SourceNativeToClcMoveBoundaryResolver
             out boundary);
     }
 
+    private static bool TryResolveOwnerSlot8Bitstream(
+        Ps3SourceClientPayloadInfo payloadInfo,
+        ReadOnlySpan<byte> body,
+        out Ps3SourceNativeToClcMoveBoundary boundary)
+    {
+        boundary = default!;
+        if (payloadInfo.PayloadObjectFrameKind != nameof(Ps3SourcePayloadObjectFrameKind.OwnerSlot8Control)
+            || payloadInfo.PayloadObjectBitreaderFieldOffset != Ps3SourcePayloadObjectFrame.OwnerSlot8RebuiltBitreaderFieldOffsetValue
+            || !Ps3SourcePayloadObjectFrame.TryReadOwnerSlot8Bitstream(body, out var bitCount, out var payloadLength)
+            || payloadLength <= 0
+            || Ps3SourcePayloadObjectFrame.OwnerSlot8BitPayloadOffset + payloadLength > body.Length)
+        {
+            return false;
+        }
+
+        return TryDecodeClcMovePayload(
+            body.Slice(Ps3SourcePayloadObjectFrame.OwnerSlot8BitPayloadOffset, payloadLength),
+            bitCount,
+            Ps3SourceNativeToClcMoveBoundaryKind.OwnerSlot8Bitstream,
+            Ps3SourcePayloadObjectFrame.OwnerSlot8BitPayloadOffset,
+            payloadLength,
+            requireExactBitCount: true,
+            out boundary);
+    }
+
+    private static bool TryResolveOwnerForwarderBitstream(
+        ReadOnlySpan<byte> body,
+        Ps3SourceOwnerForwarderBitstreamLayout layout,
+        Ps3SourceNativeToClcMoveBoundaryKind kind,
+        out Ps3SourceNativeToClcMoveBoundary boundary)
+    {
+        boundary = default!;
+        if (!Ps3SourcePayloadObjectFrame.TryReadOwnerForwarderBitstream(
+                body,
+                layout,
+                out var bitCount,
+                out var payloadOffset,
+                out var payloadLength,
+                out _)
+            || payloadLength <= 0
+            || payloadOffset + payloadLength > body.Length)
+        {
+            return false;
+        }
+
+        return TryDecodeClcMovePayload(
+            body.Slice(payloadOffset, payloadLength),
+            bitCount,
+            kind,
+            payloadOffset,
+            payloadLength,
+            requireExactBitCount: true,
+            out boundary);
+    }
+
     private static bool IsPayloadObjectInnerDecodeCandidate(Ps3SourceClientPayloadInfo payloadInfo)
     {
         if (payloadInfo.PayloadObjectFrameKind is null)
@@ -144,8 +237,7 @@ public static class Ps3SourceNativeToClcMoveBoundaryResolver
             return false;
         }
 
-        return payloadInfo.PayloadObjectFrameKind != nameof(Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken)
-            || payloadInfo.PayloadObjectAssociatedToken is > 0 and <= 0xffff;
+        return payloadInfo.PayloadObjectFrameKind != nameof(Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken);
     }
 
     private static bool TryDecodeClcMovePayload(

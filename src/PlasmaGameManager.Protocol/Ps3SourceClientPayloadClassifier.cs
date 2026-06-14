@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace PlasmaGameManager.Protocol;
 
 public static class Ps3SourceClientPayloadClassifier
@@ -16,11 +18,13 @@ public static class Ps3SourceClientPayloadClassifier
         Ps3SourceAttachedClientFrame.TryDecode(packet.Body, out var attachedFrame);
         Ps3SourceBitSidecarFrame.TryDetect(packet.Body, out var bitSidecar);
         Ps3SourcePayloadObjectFrame.TryDecode(packet.Body, out var payloadObjectFrame);
-        Ps3SourceClientNetMessageDecoder.TryDecode(packet.Body, out var clientNetMessage);
+        var clientNetMessage = TryDecodeStrongClientNetMessage(packet.Body, out var decodedClientNetMessage)
+            ? decodedClientNetMessage
+            : null;
         var nativeFrameKind = bitSidecar is not null
             ? Ps3SourceNativeFrameKind.DirectWithBitPayloadSidecarCandidate
             : nativeFrame.Kind;
-        var role = ClassifyRole(packet, directionPacketCount, nativeFrame, shape, semantic, attachedFrame);
+        var role = ClassifyRole(packet, directionPacketCount, nativeFrame, shape, semantic, attachedFrame, payloadObjectFrame);
         return new Ps3SourceClientPayloadInfo(
             role,
             packet.CandidateSequence,
@@ -64,13 +68,44 @@ public static class Ps3SourceClientPayloadClassifier
             clientNetMessage?.PayloadBitCount);
     }
 
+    private static bool TryDecodeStrongClientNetMessage(
+        ReadOnlySpan<byte> body,
+        out Ps3SourceDecodedClientNetMessage message)
+    {
+        message = default!;
+        if (!Ps3SourceClientNetMessageDecoder.TryDecode(body, out var candidate)
+            || candidate.PayloadOffset < 0
+            || candidate.PayloadLength < 0
+            || candidate.PayloadOffset > body.Length
+            || candidate.PayloadOffset + candidate.PayloadLength > body.Length)
+        {
+            return false;
+        }
+
+        if (candidate.PayloadKind == Ps3SourceClientNetMessagePayloadKind.DirectRawBody)
+        {
+            return false;
+        }
+
+        var payload = body.Slice(candidate.PayloadOffset, candidate.PayloadLength);
+        var strength = Ps3SourceClientNetMessageDecoder.AssessDecodeStrength(candidate, payload);
+        if (!strength.IsStrong)
+        {
+            return false;
+        }
+
+        message = candidate;
+        return true;
+    }
+
     private static Ps3SourceClientPayloadRole ClassifyRole(
         Ps3SourceTransportPacket packet,
         int directionPacketCount,
         Ps3SourceNativeFrameInfo nativeFrame,
         Ps3SourceGameplayPacketShape shape,
         Ps3SourcePayloadSemanticInfo semantic,
-        Ps3SourceAttachedClientFrame? attachedFrame)
+        Ps3SourceAttachedClientFrame? attachedFrame,
+        Ps3SourcePayloadObjectFrame? payloadObjectFrame)
     {
         if (Ps3SourceReliableAssociationProbe.TryDecode(packet.Body, out var associationProbe)
             && associationProbe is { IsAssociationRequest: true })
@@ -156,6 +191,7 @@ public enum Ps3SourceClientPayloadRole
     SetupControlPayload,
     EmbeddedObjectNotice,
     FragmentedClientPayload,
+    AssociatedObjectStateReset,
     UserCommandCandidate,
     BinaryControlPayload
 }
@@ -210,6 +246,14 @@ public enum Ps3SourcePayloadObjectFrameKind
     AssociatedObjectToken
 }
 
+public enum Ps3SourceOwnerForwarderBitstreamLayout
+{
+    Word5PayloadWord6ReaderWord15,
+    Word6PayloadWord7ReaderWord16,
+    DeferredPointerWord6PayloadWord10PointerWord19,
+    ConfigFallbackWord4PayloadWord5ReaderWord14
+}
+
 public sealed record Ps3SourcePayloadObjectFrame(
     Ps3SourcePayloadObjectFrameKind Kind,
     uint HeaderValue,
@@ -225,17 +269,40 @@ public sealed record Ps3SourcePayloadObjectFrame(
 {
     public const int HeaderBytes = 4;
 
+    public const int OwnerSlot8BitCountFieldOffset = 0x14;
+
+    public const int OwnerSlot8BitPayloadOffset = 0x18;
+
+    public const int OwnerForwarderWord6BitCountFieldOffset = 0x18;
+
+    public const int OwnerForwarderWord6BitPayloadOffset = 0x1c;
+
+    public const int OwnerForwarderWord6RebuiltBitreaderFieldOffsetValue = 0x40;
+
+    public const int OwnerForwarderDeferredPointerWord6BitCountFieldOffset = 0x18;
+
+    public const int OwnerForwarderDeferredPointerWord6BitPayloadOffset = 0x28;
+
+    public const int OwnerForwarderDeferredPointerWord6TempPointerFieldOffsetValue = 0x4c;
+
+    public const int OwnerForwarderConfigFallbackWord4BitCountFieldOffset = 0x10;
+
+    public const int OwnerForwarderConfigFallbackWord4BitPayloadOffset = 0x14;
+
+    public const int OwnerForwarderConfigFallbackWord4RebuiltBitreaderFieldOffsetValue = 0x38;
+
     public const int PayloadObjectBufferFieldOffset = 0x18;
 
     public const int PayloadObjectBitreaderFieldOffsetValue = 0x1c;
+
+    public const int OwnerSlot8RebuiltBitreaderFieldOffsetValue = 0x3c;
 
     public const int PayloadObjectLengthFieldOffset = 0x40;
 
     public const int PayloadObjectOwnerLengthFieldOffset = 0x44;
 
     public bool ShouldTryInnerPayloadDecoding =>
-        Kind != Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken
-        || AssociatedObjectToken is > 0 and <= 0xffff;
+        Kind != Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken;
 
     public ReadOnlySpan<byte> SliceInnerPayload(ReadOnlySpan<byte> body)
     {
@@ -275,6 +342,8 @@ public sealed record Ps3SourcePayloadObjectFrame(
         var innerPayloadOffset = kind == Ps3SourcePayloadObjectFrameKind.FragmentedSpecialWrapper
             ? Math.Min(Ps3SourceFragmentHeader.HeaderBytes, body.Length)
             : Math.Min(HeaderBytes, body.Length);
+        var innerPayloadLength = body.Length - innerPayloadOffset;
+        var payloadObjectBitreaderFieldOffset = PayloadObjectBitreaderFieldOffsetValue;
         byte? fragmentIndex = null;
         byte? fragmentTotalCount = null;
         uint? fragmentPacketCounter = null;
@@ -287,14 +356,24 @@ public sealed record Ps3SourcePayloadObjectFrame(
             fragmentPacketCounter = fragmentHeader.PacketCounter;
             fragmentWrappedOrCompressed = fragmentHeader.WrappedOrCompressed;
         }
+        else if (kind == Ps3SourcePayloadObjectFrameKind.OwnerSlot8Control
+            && TryReadOwnerSlot8Bitstream(body, out var bitCount, out var bitPayloadLength))
+        {
+            // TF.elf owner slot +0x08 target 00a52720 reads param_2[5] as
+            // bit-count, copies bits from param_2 + 6, rebuilds a bitreader at
+            // param_2 + 0xf, then forwards into 008722a0.
+            innerPayloadOffset = OwnerSlot8BitPayloadOffset;
+            innerPayloadLength = bitPayloadLength;
+            payloadObjectBitreaderFieldOffset = OwnerSlot8RebuiltBitreaderFieldOffsetValue;
+        }
 
         frame = new Ps3SourcePayloadObjectFrame(
             kind,
             header,
             signedHeader,
             innerPayloadOffset,
-            body.Length - innerPayloadOffset,
-            PayloadObjectBitreaderFieldOffsetValue,
+            innerPayloadLength,
+            payloadObjectBitreaderFieldOffset,
             kind == Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken ? header : null,
             fragmentIndex,
             fragmentTotalCount,
@@ -302,7 +381,114 @@ public sealed record Ps3SourcePayloadObjectFrame(
             fragmentWrappedOrCompressed);
         return true;
     }
+
+    public static bool TryReadOwnerSlot8Bitstream(
+        ReadOnlySpan<byte> body,
+        out int bitCount,
+        out int payloadLength)
+    {
+        if (TryReadOwnerForwarderBitstream(
+                body,
+                Ps3SourceOwnerForwarderBitstreamLayout.Word5PayloadWord6ReaderWord15,
+                out bitCount,
+                out _,
+                out payloadLength,
+                out _))
+        {
+            return true;
+        }
+
+        bitCount = 0;
+        payloadLength = 0;
+        return false;
+    }
+
+    public static bool TryReadOwnerForwarderBitstream(
+        ReadOnlySpan<byte> body,
+        Ps3SourceOwnerForwarderBitstreamLayout layout,
+        out int bitCount,
+        out int payloadOffset,
+        out int payloadLength,
+        out int readerOrPointerFieldOffset)
+    {
+        bitCount = 0;
+        payloadOffset = 0;
+        payloadLength = 0;
+        readerOrPointerFieldOffset = 0;
+        var descriptor = DescribeOwnerForwarderBitstreamLayout(layout);
+        if (body.Length < descriptor.PayloadOffset
+            || body.Length < descriptor.BitCountOffset + sizeof(int))
+        {
+            return false;
+        }
+
+        var bitCountField = body.Slice(descriptor.BitCountOffset, sizeof(int));
+        var bigEndian = BinaryPrimitives.ReadInt32BigEndian(bitCountField);
+        var littleEndian = BinaryPrimitives.ReadInt32LittleEndian(bitCountField);
+        if (!TryUseBitCount(bigEndian, body.Length, descriptor.PayloadOffset, out bitCount, out payloadLength)
+            && !TryUseBitCount(littleEndian, body.Length, descriptor.PayloadOffset, out bitCount, out payloadLength))
+        {
+            return false;
+        }
+
+        payloadOffset = descriptor.PayloadOffset;
+        readerOrPointerFieldOffset = descriptor.ReaderOrPointerFieldOffset;
+        return true;
+    }
+
+    public static Ps3SourceOwnerForwarderBitstreamDescriptor DescribeOwnerForwarderBitstreamLayout(
+        Ps3SourceOwnerForwarderBitstreamLayout layout) =>
+        layout switch
+        {
+            Ps3SourceOwnerForwarderBitstreamLayout.Word5PayloadWord6ReaderWord15 => new(
+                OwnerSlot8BitCountFieldOffset,
+                OwnerSlot8BitPayloadOffset,
+                OwnerSlot8RebuiltBitreaderFieldOffsetValue),
+            Ps3SourceOwnerForwarderBitstreamLayout.Word6PayloadWord7ReaderWord16 => new(
+                OwnerForwarderWord6BitCountFieldOffset,
+                OwnerForwarderWord6BitPayloadOffset,
+                OwnerForwarderWord6RebuiltBitreaderFieldOffsetValue),
+            Ps3SourceOwnerForwarderBitstreamLayout.DeferredPointerWord6PayloadWord10PointerWord19 => new(
+                OwnerForwarderDeferredPointerWord6BitCountFieldOffset,
+                OwnerForwarderDeferredPointerWord6BitPayloadOffset,
+                OwnerForwarderDeferredPointerWord6TempPointerFieldOffsetValue),
+            Ps3SourceOwnerForwarderBitstreamLayout.ConfigFallbackWord4PayloadWord5ReaderWord14 => new(
+                OwnerForwarderConfigFallbackWord4BitCountFieldOffset,
+                OwnerForwarderConfigFallbackWord4BitPayloadOffset,
+                OwnerForwarderConfigFallbackWord4RebuiltBitreaderFieldOffsetValue),
+            _ => throw new ArgumentOutOfRangeException(nameof(layout), layout, null)
+        };
+
+    private static bool TryUseBitCount(
+        int candidate,
+        int bodyLength,
+        int payloadOffset,
+        out int bitCount,
+        out int payloadLength)
+    {
+        bitCount = 0;
+        payloadLength = 0;
+        if (candidate <= 0 || candidate > Ps3SourceSendWrapper.MaxBitSidecarBits)
+        {
+            return false;
+        }
+
+        var byteCount = Ps3SourceSendWrapper.GetBitSidecarPayloadByteCount(candidate);
+        if (payloadOffset + byteCount > bodyLength)
+        {
+            return false;
+        }
+
+        bitCount = candidate;
+        payloadLength = byteCount;
+        return true;
+    }
 }
+
+public sealed record Ps3SourceOwnerForwarderBitstreamDescriptor(
+    int BitCountOffset,
+    int PayloadOffset,
+    int ReaderOrPointerFieldOffset);
 
 public sealed record Ps3SourceBitSidecarFrame(
     int Offset,
@@ -313,17 +499,29 @@ public sealed record Ps3SourceBitSidecarFrame(
 
     public static bool TryDetect(ReadOnlySpan<byte> body, out Ps3SourceBitSidecarFrame? frame)
     {
-        frame = null;
+        var candidates = DetectAll(body);
+        frame = candidates.Count == 0 ? null : candidates[0];
+        return frame is not null;
+    }
+
+    public static IReadOnlyList<Ps3SourceBitSidecarFrame> DetectAll(ReadOnlySpan<byte> body)
+    {
+        var frames = new List<Ps3SourceBitSidecarFrame>();
         if (body.Length < MinimumCommandPayloadBytes + Ps3SourceSendWrapper.BitSidecarCountBytes)
         {
-            return false;
+            return frames;
         }
 
         // TF.elf appends [u16 bit-count BE][ceil(bit-count/8) sidecar bytes]
-        // after the direct payload. Without the native param_5 direct length,
-        // find the last valid boundary and require enough prefix for a command.
-        for (var offset = body.Length - Ps3SourceSendWrapper.BitSidecarCountBytes; offset >= MinimumCommandPayloadBytes; offset--)
+        // after the direct payload. The direct prefix length is caller-owned, so
+        // collect every exact suffix boundary and let semantic decoders choose.
+        for (var offset = MinimumCommandPayloadBytes; offset <= body.Length - Ps3SourceSendWrapper.BitSidecarCountBytes; offset++)
         {
+            if (!LooksLikeRecoveredNativeSidecarPrefix(body[..offset]))
+            {
+                continue;
+            }
+
             if (!Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
                 || bitCount == 0)
             {
@@ -336,11 +534,49 @@ public sealed record Ps3SourceBitSidecarFrame(
                 continue;
             }
 
-            frame = new Ps3SourceBitSidecarFrame(offset, bitCount, bitPayload.Length);
+            frames.Add(new Ps3SourceBitSidecarFrame(offset, bitCount, bitPayload.Length));
+        }
+
+        return frames;
+    }
+
+    private static bool LooksLikeRecoveredNativeSidecarPrefix(ReadOnlySpan<byte> prefix)
+    {
+        if (prefix.Length == MinimumCommandPayloadBytes && IsAllZero(prefix))
+        {
             return true;
         }
 
-        return false;
+        if (StartsWithNativeDirectCommandMarker(prefix))
+        {
+            return true;
+        }
+
+        return prefix.Length >= 7
+            && prefix[0] == 0x02
+            && StartsWithNativeDirectCommandMarker(prefix[7..]);
+    }
+
+    private static bool StartsWithNativeDirectCommandMarker(ReadOnlySpan<byte> value)
+    {
+        return value.Length >= 4
+            && value[0] == 0x01
+            && value[1] == 0xb2
+            && value[2] == 0xb8
+            && value[3] == 0x7b;
+    }
+
+    private static bool IsAllZero(ReadOnlySpan<byte> value)
+    {
+        foreach (var item in value)
+        {
+            if (item != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -352,6 +588,19 @@ public sealed record Ps3SourceReliableAssociationProbe(
     public bool IsAssociationRequest => MessageType == 4;
 
     public uint NativeAssociationToken => AssociationTokenLittleEndian;
+
+    public static byte[] Encode(byte messageType, uint nativeAssociationToken)
+    {
+        var body = new byte[5];
+        body[0] = messageType;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), nativeAssociationToken);
+        return body;
+    }
+
+    public static byte[] EncodeAssociationAck(uint nativeAssociationToken)
+    {
+        return Encode(5, nativeAssociationToken);
+    }
 
     public static bool TryDecode(ReadOnlySpan<byte> body, out Ps3SourceReliableAssociationProbe? probe)
     {
@@ -436,14 +685,26 @@ public sealed record Ps3SourceClientCommandIntent(
 {
     public bool HasMovement => ForwardMove != 0 || SideMove != 0 || UpMove != 0;
 
-    public static bool TryDecode(Ps3SourceClientPayloadInfo info, ReadOnlySpan<byte> body, out Ps3SourceClientCommandIntent intent)
+    public static bool TryDecode(
+        Ps3SourceClientPayloadInfo info,
+        ReadOnlySpan<byte> body,
+        out Ps3SourceClientCommandIntent intent,
+        bool allowMarkerlessAssociatedObject = false)
     {
         intent = default!;
+        var markerlessAssociatedObject = info.Role != Ps3SourceClientPayloadRole.AttachedPlayerPayloadFrame
+            && info.BitSidecarOffset is null
+            && string.Equals(
+                info.PayloadObjectFrameKind,
+                nameof(Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken),
+                StringComparison.Ordinal);
         if (body.Length < 32
+            || (markerlessAssociatedObject && !allowMarkerlessAssociatedObject)
             || info.Role is Ps3SourceClientPayloadRole.InitialHandoffProbe
                 or Ps3SourceClientPayloadRole.ReliableAssociationProbe
                 or Ps3SourceClientPayloadRole.ShortControlAck
                 or Ps3SourceClientPayloadRole.EmbeddedObjectNotice
+                or Ps3SourceClientPayloadRole.AssociatedObjectStateReset
                 or Ps3SourceClientPayloadRole.FragmentedClientPayload)
         {
             return false;

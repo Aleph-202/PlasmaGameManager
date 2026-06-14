@@ -28,6 +28,40 @@ public sealed record Ps3SourceServerInfo(
     byte ClientVisibleFlag,
     string ConnectionAddress);
 
+public sealed record Ps3SourceDecodedPlayerSummary(
+    byte SummaryHeaderValue,
+    Ps3SourcePlayerSummaryEntry[] Entries,
+    int ConsumedBits);
+
+public sealed record Ps3SourceDecodedResourceStringTable(
+    Ps3SourceResourceStringEntry[] Entries,
+    int ConsumedBits);
+
+public sealed record Ps3SourceDecodedServerInfo(
+    Ps3SourceServerInfo Info,
+    int ConsumedBits);
+
+public sealed record Ps3SourceHudPlayerObjectUpdate(
+    int PrimaryValue,
+    int? SecondaryValue = null,
+    string? Label = null);
+
+public sealed record Ps3SourceDecodedHudPlayerObjectUpdate(
+    Ps3SourceHudPlayerObjectUpdate Update,
+    int ConsumedBits);
+
+public sealed record Ps3SourceGameplayStatTimesUsed(
+    int VersionOrKind,
+    int State,
+    int Value,
+    string ObjectName,
+    string Classification,
+    string? ExtraName = null);
+
+public sealed record Ps3SourceDecodedGameplayStatTimesUsed(
+    Ps3SourceGameplayStatTimesUsed Update,
+    int ConsumedBits);
+
 public sealed record Ps3SourcePlayerResourceDelta(
     byte PlayerSlotIndex,
     ushort Health,
@@ -380,6 +414,213 @@ public sealed record Ps3SourcePlayerAnimEvent(
 
 public static class Ps3SourceNativeMessages
 {
+    public static bool TryDecodePlayerSummary(
+        ReadOnlySpan<byte> payload,
+        out Ps3SourceDecodedPlayerSummary summary,
+        int? bitCount = null)
+    {
+        summary = new Ps3SourceDecodedPlayerSummary(0, [], 0);
+        var reader = new NativeBitReader(payload, bitCount ?? payload.Length * 8);
+        if (!reader.TryReadSigned32(out var sentinel)
+            || sentinel != -1
+            || !reader.TryReadByte(out var messageId)
+            || messageId != 0x44
+            || !reader.TryReadByte(out var header))
+        {
+            return false;
+        }
+
+        var entries = new List<Ps3SourcePlayerSummaryEntry>(header);
+        for (var i = 0; i < header; i++)
+        {
+            if (!reader.TryReadByte(out var playerSlotIndex)
+                || !reader.TryReadStringZ(256, out var displayName)
+                || !reader.TryReadSigned32(out var scoreOrStat)
+                || !reader.TryReadFloat(out var floatValue))
+            {
+                return false;
+            }
+
+            entries.Add(new Ps3SourcePlayerSummaryEntry(playerSlotIndex, displayName, scoreOrStat, floatValue));
+        }
+
+        summary = new Ps3SourceDecodedPlayerSummary(header, entries.ToArray(), reader.ConsumedBits);
+        return true;
+    }
+
+    public static bool TryDecodeResourceStringTable(
+        ReadOnlySpan<byte> payload,
+        out Ps3SourceDecodedResourceStringTable table,
+        int? bitCount = null)
+    {
+        table = new Ps3SourceDecodedResourceStringTable([], 0);
+        var reader = new NativeBitReader(payload, bitCount ?? payload.Length * 8);
+        if (!reader.TryReadSigned32(out var sentinel)
+            || sentinel != -1
+            || !reader.TryReadByte(out var messageId)
+            || messageId != 0x45
+            || !reader.TryReadSigned16(out var count)
+            || count < 0)
+        {
+            return false;
+        }
+
+        var entries = new List<Ps3SourceResourceStringEntry>(count);
+        for (var i = 0; i < count; i++)
+        {
+            if (!reader.TryReadStringZ(260, out var resourceName)
+                || !reader.TryReadStringZ(260, out var classification))
+            {
+                return false;
+            }
+
+            entries.Add(new Ps3SourceResourceStringEntry(resourceName, classification));
+        }
+
+        table = new Ps3SourceDecodedResourceStringTable(entries.ToArray(), reader.ConsumedBits);
+        return true;
+    }
+
+    public static bool TryDecodeServerInfo(
+        ReadOnlySpan<byte> payload,
+        out Ps3SourceDecodedServerInfo serverInfo,
+        int? bitCount = null)
+    {
+        serverInfo = new Ps3SourceDecodedServerInfo(
+            new Ps3SourceServerInfo("", "", "", "", 0, 0, 0, 0, 0, 0, 0, 0, ""),
+            0);
+        var reader = new NativeBitReader(payload, bitCount ?? payload.Length * 8);
+        if (!reader.TryReadSigned32(out var sentinel)
+            || sentinel != -1
+            || !reader.TryReadByte(out var messageId)
+            || messageId != 0x49
+            || !reader.TryReadByte(out var version)
+            || version != 8
+            || !reader.TryReadStringZ(260, out var serverName)
+            || !reader.TryReadStringZ(260, out var mapName)
+            || !reader.TryReadStringZ(260, out var gameDirectory)
+            || !reader.TryReadStringZ(260, out var description)
+            || !reader.TryReadSigned16(out var listenPortOrNetworkShort)
+            || !reader.TryReadByte(out var currentPlayers)
+            || !reader.TryReadByte(out var maxPlayers)
+            || !reader.TryReadByte(out var botOrReservedCount)
+            || !reader.TryReadByte(out var serverVariantCode)
+            || !reader.TryReadByte(out var platformCode)
+            || !reader.TryReadByte(out var passwordOrPrivateFlag)
+            || !reader.TryReadByte(out var clientVisibleFlag)
+            || !reader.TryReadStringZ(64, out var connectionAddress))
+        {
+            return false;
+        }
+
+        serverInfo = new Ps3SourceDecodedServerInfo(
+            new Ps3SourceServerInfo(
+                serverName,
+                mapName,
+                gameDirectory,
+                description,
+                listenPortOrNetworkShort,
+                currentPlayers,
+                maxPlayers,
+                botOrReservedCount,
+                serverVariantCode,
+                platformCode,
+                passwordOrPrivateFlag,
+                clientVisibleFlag,
+                connectionAddress),
+            reader.ConsumedBits);
+        return true;
+    }
+
+    public static bool TryDecodeHudPlayerObjectUpdate(
+        ReadOnlySpan<byte> payload,
+        out Ps3SourceDecodedHudPlayerObjectUpdate update,
+        int? bitCount = null)
+    {
+        update = new Ps3SourceDecodedHudPlayerObjectUpdate(new Ps3SourceHudPlayerObjectUpdate(0), 0);
+        var reader = new NativeBitReader(payload, bitCount ?? payload.Length * 8);
+        if (!reader.TryReadSigned32(out var sentinel)
+            || sentinel != -1
+            || !reader.TryReadByte(out var messageId)
+            || messageId != 0x41
+            || !reader.TryReadSigned32(out var primaryValue))
+        {
+            return false;
+        }
+
+        int? secondaryValue = null;
+        string? label = null;
+        if (reader.RemainingBits > 0)
+        {
+            if (!reader.TryReadSigned32(out var secondary))
+            {
+                return false;
+            }
+
+            secondaryValue = secondary;
+        }
+
+        if (reader.RemainingBits > 0)
+        {
+            if (!reader.TryReadStringZ(260, out var decodedLabel))
+            {
+                return false;
+            }
+
+            label = decodedLabel;
+        }
+
+        update = new Ps3SourceDecodedHudPlayerObjectUpdate(
+            new Ps3SourceHudPlayerObjectUpdate(primaryValue, secondaryValue, label),
+            reader.ConsumedBits);
+        return true;
+    }
+
+    public static bool TryDecodeGameplayStatTimesUsed(
+        ReadOnlySpan<byte> payload,
+        out Ps3SourceDecodedGameplayStatTimesUsed stat,
+        int? bitCount = null)
+    {
+        stat = new Ps3SourceDecodedGameplayStatTimesUsed(
+            new Ps3SourceGameplayStatTimesUsed(0, 0, 0, "", ""),
+            0);
+        var reader = new NativeBitReader(payload, bitCount ?? payload.Length * 8);
+        if (!reader.TryReadSigned32(out var sentinel)
+            || sentinel != -1
+            || !reader.TryReadByte(out var messageId)
+            || messageId != 0x6b
+            || !reader.TryReadSigned32(out var versionOrKind)
+            || !reader.TryReadSigned32(out var state)
+            || !reader.TryReadSigned32(out var value)
+            || !reader.TryReadStringZ(260, out var objectName)
+            || !reader.TryReadStringZ(260, out var classification))
+        {
+            return false;
+        }
+
+        string? extraName = null;
+        if (state == 2 && reader.RemainingBits > 0)
+        {
+            if (!reader.TryReadStringZ(260, out var decodedExtraName))
+            {
+                return false;
+            }
+
+            extraName = decodedExtraName;
+        }
+
+        stat = new Ps3SourceDecodedGameplayStatTimesUsed(
+            new Ps3SourceGameplayStatTimesUsed(
+                versionOrKind,
+                state,
+                value,
+                objectName,
+                classification,
+                extraName),
+            reader.ConsumedBits);
+        return true;
+    }
+
     public static byte[] BuildPlayerSummary(byte summaryHeaderValue, IReadOnlyList<Ps3SourcePlayerSummaryEntry> entries)
     {
         var writer = new NativeBitWriter();
@@ -434,6 +675,43 @@ public static class Ps3SourceNativeMessages
         return writer.ToArray();
     }
 
+    public static byte[] BuildHudPlayerObjectUpdate(Ps3SourceHudPlayerObjectUpdate update)
+    {
+        var writer = new NativeBitWriter();
+        writer.WriteSigned32(-1);
+        writer.WriteByte(0x41);
+        writer.WriteSigned32(update.PrimaryValue);
+        if (update.SecondaryValue is { } secondaryValue)
+        {
+            writer.WriteSigned32(secondaryValue);
+        }
+
+        if (update.Label is { } label)
+        {
+            writer.WriteStringZ(label);
+        }
+
+        return writer.ToArray();
+    }
+
+    public static byte[] BuildGameplayStatTimesUsed(Ps3SourceGameplayStatTimesUsed update)
+    {
+        var writer = new NativeBitWriter();
+        writer.WriteSigned32(-1);
+        writer.WriteByte(0x6b);
+        writer.WriteSigned32(update.VersionOrKind);
+        writer.WriteSigned32(update.State);
+        writer.WriteSigned32(update.Value);
+        writer.WriteStringZ(update.ObjectName);
+        writer.WriteStringZ(update.Classification);
+        if (update.State == 2 && update.ExtraName is { } extraName)
+        {
+            writer.WriteStringZ(extraName);
+        }
+
+        return writer.ToArray();
+    }
+
     public static byte[] BuildPlayerResourceDelta(Ps3SourcePlayerResourceDelta delta)
     {
         var semanticPayload = new List<byte>
@@ -472,10 +750,10 @@ public static class Ps3SourceNativeMessages
                 ObjectName: "CPlayerResource",
                 Descriptor: null,
                 LastWrittenFrameIndex: 0)
-                .MarkActive(descriptor, delta.PlayerSlotIndex, 1)
+                .MarkActive(descriptor, 0, NativePartialChunkCount(descriptor))
         };
 
-        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroups(groups, frameIndex: 0).Payload;
+        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroupsNativePartialWindows(groups, frameIndex: 0).Payload;
     }
 
     public static byte[] BuildTinyPlayerResourceDelta(Ps3SourcePlayerResourceDelta delta)
@@ -609,10 +887,10 @@ public static class Ps3SourceNativeMessages
                 ObjectName: "CTFPlayer",
                 Descriptor: null,
                 LastWrittenFrameIndex: 0)
-                .MarkActive(descriptor, delta.PlayerSlotIndex, 1)
+                .MarkActive(descriptor, 0, NativePartialChunkCount(descriptor))
         };
 
-        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroups(groups, frameIndex: 0).Payload;
+        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroupsNativePartialWindows(groups, frameIndex: 0).Payload;
     }
 
     public static byte[] BuildCompactPlayerEntityDelta(Ps3SourcePlayerEntityDelta delta)
@@ -847,10 +1125,10 @@ public static class Ps3SourceNativeMessages
                 ObjectName: "CTFGameRulesProxy",
                 Descriptor: null,
                 LastWrittenFrameIndex: 0)
-                .MarkActive(descriptor, delta.PlayerSlotIndex, 1)
+                .MarkActive(descriptor, 0, NativePartialChunkCount(descriptor))
         };
 
-        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroups(groups, frameIndex: 0).Payload;
+        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroupsNativePartialWindows(groups, frameIndex: 0).Payload;
     }
 
     public static byte[] BuildCompactGameplayRulesDelta(Ps3SourceGameplayStateDelta delta)
@@ -899,7 +1177,11 @@ public static class Ps3SourceNativeMessages
         WriteVector3Property(semanticPayload, "m_vecViewOffset", delta.ViewOffsetX, delta.ViewOffsetY, delta.ViewOffsetZ);
         WriteFloatProperty(semanticPayload, "m_flFriction", delta.Friction);
         WriteUIntArrayProperty(semanticPayload, "m_iAmmo", delta.Ammo, maxCount: 8);
+        WritePropertyNameValue(semanticPayload, "m_nTickBase", delta.TickBase);
         WritePropertyNameValue(semanticPayload, "m_hGroundEntity", delta.GroundEntityHandle);
+        WriteStringZ(semanticPayload, "DT_BaseCombatCharacter");
+        WritePropertyNameValue(semanticPayload, "m_hActiveWeapon", delta.ActiveWeaponHandle);
+        WriteUIntArrayProperty(semanticPayload, "m_hMyWeapons", delta.WeaponHandles, maxCount: 8);
         WriteVector3Property(semanticPayload, "m_vecVelocity", delta.VelocityX, delta.VelocityY, delta.VelocityZ);
         WriteVector3Property(semanticPayload, "m_vecBaseVelocity", delta.BaseVelocityX, delta.BaseVelocityY, delta.BaseVelocityZ);
         WriteStringZ(semanticPayload, "DT_Local");
@@ -913,6 +1195,7 @@ public static class Ps3SourceNativeMessages
         WritePropertyNameValue(semanticPayload, "m_hRagdoll", delta.RagdollHandle);
         WritePropertyNameValue(semanticPayload, "m_iSpawnCounter", delta.SpawnCounter);
         WritePropertyNameValue(semanticPayload, "m_nPlayerState", delta.PlayerState);
+        WritePropertyNameValue(semanticPayload, "m_iMaxHealth", delta.MaxHealth);
         WriteStringZ(semanticPayload, "DT_TFPlayerShared");
         WritePropertyNameValue(semanticPayload, "m_bJumping", delta.Jumping);
         WritePropertyNameValue(semanticPayload, "m_nPlayerState", delta.PlayerState);
@@ -968,6 +1251,7 @@ public static class Ps3SourceNativeMessages
         WriteFloatProperty(semanticPayload, "m_flMaxspeed", delta.MaxSpeed);
         WritePropertyNameValue(semanticPayload, "m_iObserverMode", delta.ObserverMode);
         WriteUIntArrayProperty(semanticPayload, "m_iAmmo", delta.Ammo, maxCount: 8);
+        WritePropertyNameValue(semanticPayload, "m_nTickBase", delta.TickBase);
         WritePropertyNameValue(semanticPayload, "m_hGroundEntity", delta.GroundEntityHandle);
         WriteStringZ(semanticPayload, "DT_Local");
         WritePropertyNameValue(semanticPayload, "m_bDucked", delta.Ducked);
@@ -1026,6 +1310,7 @@ public static class Ps3SourceNativeMessages
         WriteVector3Property(semanticPayload, "m_vecViewOffset", delta.ViewOffsetX, delta.ViewOffsetY, delta.ViewOffsetZ);
         WriteFloatProperty(semanticPayload, "m_flFriction", delta.Friction);
         WriteUIntArrayProperty(semanticPayload, "m_iAmmo", delta.Ammo, maxCount: 8);
+        WritePropertyNameValue(semanticPayload, "m_nTickBase", delta.TickBase);
         WritePropertyNameValue(semanticPayload, "m_nNextThinkTick", delta.NextThinkTick);
         WritePropertyNameValue(semanticPayload, "m_hGroundEntity", delta.GroundEntityHandle);
         WriteVector3Property(semanticPayload, "m_vecVelocity", delta.VelocityX, delta.VelocityY, delta.VelocityZ);
@@ -1077,6 +1362,9 @@ public static class Ps3SourceNativeMessages
     {
         var semanticPayload = new List<byte>();
         WriteStringZ(semanticPayload, "TF_RulesPulse");
+        WriteStringZ(semanticPayload, "DT_BasePlayerLocalData");
+        WritePropertyNameValue(semanticPayload, "m_nTickBase", delta.TickBase);
+        WriteUIntArrayProperty(semanticPayload, "m_iAmmo", delta.Ammo, maxCount: 8);
         WritePropertyNameValue(semanticPayload, "m_iRoundState", delta.RoundState);
         WritePropertyNameValue(semanticPayload, "m_iCaptures", delta.Captures);
         semanticPayload.Add(0);
@@ -1577,10 +1865,15 @@ public static class Ps3SourceNativeMessages
                 ObjectName: objectName,
                 Descriptor: null,
                 LastWrittenFrameIndex: 0)
-                .MarkActive(descriptor, startIndex, entityCount)
+                .MarkActive(descriptor, 0, NativePartialChunkCount(descriptor))
         };
 
-        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroups(groups, frameIndex: 0).Payload;
+        return Ps3SourceEntityDeltaFrameBuilder.EncodeActiveGroupsNativePartialWindows(groups, frameIndex: 0).Payload;
+    }
+
+    private static byte NativePartialChunkCount(Ps3SourceQueuedBitstreamDescriptor descriptor)
+    {
+        return checked((byte)Math.Clamp((int)descriptor.ChunkCount, 1, 7));
     }
 
     private sealed class NativeBitWriter
@@ -1648,6 +1941,134 @@ public static class Ps3SourceNativeMessages
 
                 _bitLength++;
             }
+        }
+    }
+
+    private ref struct NativeBitReader
+    {
+        private readonly ReadOnlySpan<byte> _bytes;
+        private readonly int _bitCount;
+
+        public NativeBitReader(ReadOnlySpan<byte> bytes, int bitCount)
+        {
+            if (bitCount < 0 || bitCount > bytes.Length * 8)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bitCount));
+            }
+
+            _bytes = bytes;
+            _bitCount = bitCount;
+            ConsumedBits = 0;
+        }
+
+        public int ConsumedBits { get; private set; }
+
+        public int RemainingBits => _bitCount - ConsumedBits;
+
+        public bool TryReadByte(out byte value)
+        {
+            if (!TryReadBits(8, out var raw))
+            {
+                value = 0;
+                return false;
+            }
+
+            value = checked((byte)raw);
+            return true;
+        }
+
+        public bool TryReadSigned16(out short value)
+        {
+            if (!TryReadSigned(16, out var decoded))
+            {
+                value = 0;
+                return false;
+            }
+
+            value = checked((short)decoded);
+            return true;
+        }
+
+        public bool TryReadSigned32(out int value)
+        {
+            return TryReadSigned(32, out value);
+        }
+
+        public bool TryReadFloat(out float value)
+        {
+            if (!TryReadBits(32, out var raw))
+            {
+                value = 0;
+                return false;
+            }
+
+            value = BitConverter.UInt32BitsToSingle(raw);
+            return true;
+        }
+
+        public bool TryReadStringZ(int maxBytes, out string value)
+        {
+            value = "";
+            if (maxBytes <= 0)
+            {
+                return false;
+            }
+
+            var bytes = new List<byte>(Math.Min(maxBytes, 256));
+            for (var i = 0; i < maxBytes; i++)
+            {
+                if (!TryReadSigned(8, out var raw))
+                {
+                    return false;
+                }
+
+                var current = unchecked((byte)raw);
+                if (current == 0)
+                {
+                    value = Encoding.ASCII.GetString(CollectionsMarshal.AsSpan(bytes));
+                    return true;
+                }
+
+                bytes.Add(current);
+            }
+
+            return false;
+        }
+
+        private bool TryReadSigned(int width, out int value)
+        {
+            value = 0;
+            if (width is <= 1 or > 32
+                || !TryReadBits(width - 1, out var payload)
+                || !TryReadBits(1, out var sign))
+            {
+                return false;
+            }
+
+            value = sign == 0
+                ? checked((int)payload)
+                : checked((int)((long)payload - (1L << (width - 1))));
+            return true;
+        }
+
+        private bool TryReadBits(int bitCount, out uint value)
+        {
+            value = 0;
+            if (bitCount is < 0 or > 32 || ConsumedBits + bitCount > _bitCount)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < bitCount; i++)
+            {
+                if (((_bytes[(ConsumedBits + i) >> 3] >> ((ConsumedBits + i) & 7)) & 1) != 0)
+                {
+                    value |= 1u << i;
+                }
+            }
+
+            ConsumedBits += bitCount;
+            return true;
         }
     }
 }

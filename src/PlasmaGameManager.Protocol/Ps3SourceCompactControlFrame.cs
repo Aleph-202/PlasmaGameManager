@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+
 namespace PlasmaGameManager.Protocol;
 
 public sealed record Ps3SourceCompactControlFrame(
@@ -14,6 +17,136 @@ public sealed record Ps3SourceCompactControlFrame(
     uint? LastUInt32BigEndian,
     uint? LastUInt32LittleEndian)
 {
+    public const int AckToken10BodyBytes = 10;
+    public const int Control17BodyBytes = 17;
+    public const int AckWindow21BodyBytes = 21;
+    public const int AckWindow28BodyBytes = 28;
+    public const int ServerControl31BodyBytes = 31;
+
+    public static byte[] EncodeAckToken10(
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind)
+    {
+        return EncodeCompactControl(
+            AckToken10BodyBytes,
+            gameId,
+            playerId,
+            acknowledgedClientSequence,
+            observedClientPacketCount,
+            serverSequence,
+            streamKind,
+            0x10);
+    }
+
+    public static byte[] EncodeControl17(
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind)
+    {
+        return EncodeCompactControl(
+            Control17BodyBytes,
+            gameId,
+            playerId,
+            acknowledgedClientSequence,
+            observedClientPacketCount,
+            serverSequence,
+            streamKind,
+            0x17);
+    }
+
+    public static byte[] EncodeAckWindow21(
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind)
+    {
+        return EncodeCompactControl(
+            AckWindow21BodyBytes,
+            gameId,
+            playerId,
+            acknowledgedClientSequence,
+            observedClientPacketCount,
+            serverSequence,
+            streamKind,
+            0x21);
+    }
+
+    public static byte[] EncodeAckWindow28(
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind)
+    {
+        return EncodeCompactControl(
+            AckWindow28BodyBytes,
+            gameId,
+            playerId,
+            acknowledgedClientSequence,
+            observedClientPacketCount,
+            serverSequence,
+            streamKind,
+            0x28);
+    }
+
+    public static byte[] EncodeServerControl31(
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind)
+    {
+        return EncodeCompactControl(
+            ServerControl31BodyBytes,
+            gameId,
+            playerId,
+            acknowledgedClientSequence,
+            observedClientPacketCount,
+            serverSequence,
+            streamKind,
+            0x31);
+    }
+
+    private static byte[] EncodeCompactControl(
+        int bodyBytes,
+        uint gameId,
+        uint playerId,
+        ushort acknowledgedClientSequence,
+        int observedClientPacketCount,
+        uint serverSequence,
+        byte streamKind,
+        byte family)
+    {
+        Span<byte> seed = stackalloc byte[24];
+        seed[0] = streamKind;
+        BinaryPrimitives.WriteUInt32BigEndian(seed[1..5], gameId);
+        BinaryPrimitives.WriteUInt32BigEndian(seed[5..9], playerId);
+        BinaryPrimitives.WriteUInt16BigEndian(seed[9..11], acknowledgedClientSequence);
+        BinaryPrimitives.WriteUInt32BigEndian(seed[11..15], unchecked((uint)observedClientPacketCount));
+        BinaryPrimitives.WriteUInt32BigEndian(seed[15..19], serverSequence);
+        seed[19] = (byte)bodyBytes;
+        seed[20] = 0x50;
+        seed[21] = 0x53;
+        seed[22] = 0x33;
+        seed[23] = family;
+
+        var digest = SHA256.HashData(seed);
+        var body = new byte[bodyBytes];
+        digest.AsSpan(0, body.Length).CopyTo(body);
+        return body;
+    }
+
     public static Ps3SourceCompactControlFrame? TryAnalyze(
         ReadOnlySpan<byte> body,
         IReadOnlyList<Ps3SourceEmbeddedObjectRecord> embeddedRecords)

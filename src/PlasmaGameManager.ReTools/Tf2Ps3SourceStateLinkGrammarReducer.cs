@@ -80,12 +80,12 @@ public static class Tf2Ps3SourceStateLinkGrammarReducer
                 "Generate every PNG record through Ps3SourcePlayerStateLinkRecord; do not hide state-link records inside Convert.FromHexString bodies.",
                 "Build state-link batches from the Source object association graph: host/root object, player objects, FrozenState peers, descriptor objects, and map-load object links.",
                 "Replace queued-prefix/control bytes before PNG records with the native queued peer-channel submessage builder recovered from TF.elf, not copied prefixes.",
-                "Replace generated queued-prefix bytes from BuildQueuedPlayerStateLinkBody with the same native queued peer-channel writer before declaring the state-link layer complete.",
+                "Keep generated queued-prefix debt at zero by routing dynamic PlayerStateLink batches through BuildNativeQueuedPlayerStateLinkBody.",
                 "Keep object-stream bootstrap and snapshot/entity-delta generation separate from the 12-byte PNG record grammar; PNG is only the linked-object record layer."
             ],
             [
                 "The 12-byte PNG record grammar is now named and shared by protocol/server code.",
-                "Queued-prefix/control bytes before many PNG batches remain unresolved native-debt and are tracked by PrefixDebt, GeneratedPrefixDebt, plus PCAP opaque-prefix counts.",
+                "Queued-prefix/control bytes before many PCAP PNG batches remain an opaque native format in corpus analysis, while current responder PrefixDebt and GeneratedPrefixDebt are zero.",
                 "EA Tunnel remains outside this record grammar; current evidence points at TF.elf queued peer-channel and object-stream paths for client-visible traffic."
             ]);
 

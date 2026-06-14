@@ -94,14 +94,27 @@ public sealed record Ps3SourceClientCommandBatch(
         out Ps3SourceClientCommandBatch batch)
     {
         batch = default!;
-        if (payloadInfo.BitSidecarOffset is not { } offset
-            || !Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
-            || bitCount == 0)
+        if (payloadInfo.BitSidecarOffset is { } offset
+            && TryDecodeBitSidecarBatchAtOffset(body, offset, commandCount, previousCommand, out batch))
         {
-            return false;
+            return true;
         }
 
-        return TryDecodeBatch(bitPayload, bitCount, commandCount, previousCommand, out batch);
+        foreach (var candidate in Ps3SourceBitSidecarFrame.DetectAll(body))
+        {
+            if (candidate.Offset != payloadInfo.BitSidecarOffset
+                && TryDecodeBitSidecarBatchAtOffset(
+                    body,
+                    candidate.Offset,
+                    commandCount,
+                    previousCommand,
+                    out batch))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool TryDecodeSingleBitSidecarCommand(
@@ -111,6 +124,11 @@ public sealed record Ps3SourceClientCommandBatch(
         out Ps3SourceClientCommandBatch batch)
     {
         batch = default!;
+        if (payloadInfo.BitSidecarOffset is null)
+        {
+            return false;
+        }
+
         if (!TryDecodeBitSidecarBatch(
                 payloadInfo,
                 body,
@@ -134,8 +152,33 @@ public sealed record Ps3SourceClientCommandBatch(
     {
         move = default!;
         batch = default!;
-        if (payloadInfo.BitSidecarOffset is not { } offset
-            || !Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
+        if (payloadInfo.BitSidecarOffset is { } offset
+            && TryDecodeBitSidecarClcMoveBatchAtOffset(body, offset, out move, out batch))
+        {
+            return true;
+        }
+
+        foreach (var candidate in Ps3SourceBitSidecarFrame.DetectAll(body))
+        {
+            if (candidate.Offset != payloadInfo.BitSidecarOffset
+                && TryDecodeBitSidecarClcMoveBatchAtOffset(body, candidate.Offset, out move, out batch))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryDecodeBitSidecarClcMoveBatchAtOffset(
+        ReadOnlySpan<byte> body,
+        int offset,
+        out Ps3SourceClcMoveMessage move,
+        out Ps3SourceClientCommandBatch batch)
+    {
+        move = default!;
+        batch = default!;
+        if (!Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
             || bitCount == 0)
         {
             return false;
@@ -143,20 +186,31 @@ public sealed record Ps3SourceClientCommandBatch(
 
         foreach (var includesMessageType in new[] { true, false })
         {
-            if (!Ps3SourceClcMoveMessage.TryDecode(bitPayload, includesMessageType, out var candidate)
-                || candidate.TotalBitsConsumed != bitCount
-                || !candidate.TryDecodeUserCmdBatch(default, out var candidateBatch)
-                || candidateBatch.ConsumedBits != candidate.CommandDataBitCount)
+            if (Ps3SourceClcMoveMessage.TryDecode(bitPayload, includesMessageType, out var candidate)
+                && candidate.TotalBitsConsumed == bitCount
+                && candidate.TryDecodeUserCmdBatch(default, out var candidateBatch)
+                && candidateBatch.ConsumedBits == candidate.CommandDataBitCount)
             {
-                continue;
+                move = candidate;
+                batch = candidateBatch;
+                return true;
             }
-
-            move = candidate;
-            batch = candidateBatch;
-            return true;
         }
 
         return false;
+    }
+
+    private static bool TryDecodeBitSidecarBatchAtOffset(
+        ReadOnlySpan<byte> body,
+        int offset,
+        int commandCount,
+        Ps3SourceUserCmd previousCommand,
+        out Ps3SourceClientCommandBatch batch)
+    {
+        batch = default!;
+        return Ps3SourceSendWrapper.TryDecodeBitSidecar(body, offset, out var bitCount, out var bitPayload)
+            && bitCount != 0
+            && TryDecodeBatch(bitPayload, bitCount, commandCount, previousCommand, out batch);
     }
 
     private static bool TryDecodeOne(

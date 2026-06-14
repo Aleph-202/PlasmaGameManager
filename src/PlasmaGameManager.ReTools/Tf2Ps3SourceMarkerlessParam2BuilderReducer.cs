@@ -92,14 +92,21 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
     public static async Task<Tf2Ps3SourceMarkerlessParam2BuilderReport> ReduceAsync(
         string cExportPath,
         string recvBitreaderCensusPath,
-        string outputPath)
+        string outputPath,
+        string? implementationRootPath = null)
     {
         var functions = ExtractFunctions(await File.ReadAllLinesAsync(cExportPath));
         var functionMap = functions.ToDictionary(static function => function.Address, StringComparer.Ordinal);
         using var recvCensus = JsonDocument.Parse(await File.ReadAllTextAsync(recvBitreaderCensusPath));
+        implementationRootPath ??= FindImplementationRoot(outputPath);
 
         var entries = Targets
             .Select(target => BuildEntry(target, functionMap))
+            .ToArray();
+        var implementationEvidence = DetectServerImplementationEvidence(implementationRootPath);
+        var missingImplementationEvidence = implementationEvidence
+            .Where(static evidence => !evidence.Found)
+            .Select(static evidence => evidence.Id)
             .ToArray();
 
         var summary = recvCensus.RootElement.GetProperty("Summary");
@@ -117,8 +124,8 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
             && markerlessRecvFillRecovered
             && fragmentReassemblyRecovered
             && drainDispatchLoopRecovered;
-        var serverImplementationUpdated = false;
-        var nativeSourceInputReady = concretePayloadObjectBoundaryRecovered && serverImplementationUpdated;
+        var serverImplementationUpdated = missingImplementationEvidence.Length == 0;
+        var nativeSourceInputReady = false;
 
         var gates = new[]
         {
@@ -151,17 +158,17 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
                 "concrete-markerless-payload-object-boundary",
                 concretePayloadObjectBoundaryRecovered ? "candidate-proven" : "missing",
                 "008bdb88 -> 008bdff0 -> 008be1e8",
-                "The missing boundary is now narrowed to this payload-object wrapper path, but the replacement server still needs to implement it."),
+                "The missing boundary is narrowed to this payload-object wrapper path, but PCAP/live markerless bodies still need to validate against the native association descriptor grammar or a recovered pre-payload transform."),
             new Tf2Ps3SourceMarkerlessParam2BuilderGate(
                 "server-implementation-updated",
                 serverImplementationUpdated ? "proven" : "missing",
-                "Ps3NativeSourceResponder",
+                implementationRootPath,
                 "The native Source responder must consume client markerless bodies through this recovered payload object contract instead of relying on replay/fallback data."),
             new Tf2Ps3SourceMarkerlessParam2BuilderGate(
                 "native-source-input-ready",
                 nativeSourceInputReady ? "proven" : "missing",
-                "server implementation gate",
-                "Native Source input is not ready until the recovered payload-object wrapper is implemented and verified against live/client PCAP traffic.")
+                "payload-object first-word / association descriptor validation",
+                "Native Source input is not ready until hard markerless PCAP/live uploads become valid TF.elf payload objects or the missing pre-payload wire transform is recovered and implemented.")
         };
 
         var report = new Tf2Ps3SourceMarkerlessParam2BuilderReport(
@@ -169,7 +176,8 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
             "Recovers the TF.elf payload-object wrapper that bridges markerless/opaque client Source bodies into the param_2+7 bitreader consumed by native Source handlers.",
             new Tf2Ps3SourceMarkerlessParam2BuilderInputs(
                 cExportPath,
-                recvBitreaderCensusPath),
+                recvBitreaderCensusPath,
+                implementationRootPath),
             new Tf2Ps3SourceMarkerlessParam2BuilderSummary(
                 "008bdff0",
                 "008bdb88",
@@ -189,19 +197,159 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
                 concretePayloadObjectBoundaryRecovered,
                 serverImplementationUpdated,
                 nativeSourceInputReady,
-                gates.Count(static gate => gate.Status is "missing" or "needs-review")),
+                implementationEvidence.Count(static evidence => evidence.Found),
+                missingImplementationEvidence.Length,
+                missingImplementationEvidence,
+                gates.Count(static gate => gate.Status is "missing" or "needs-review" or "candidate-proven")),
             entries,
             gates,
+            implementationEvidence,
             [
                 "The raw TF.elf C export now shows the caller-side object builder that the older slot70 report could not recover: 008bdff0 indexes a 0x50-byte payload object, stores buffer/length fields, and initializes a bitreader at object +0x1c.",
                 "008bdb88 is the receive/fill side: it writes into payload object word 6 and sets words 0x10/0x11, including special -2 fragment and -3 repack paths.",
                 "008be1e8 is the drain/dispatch side: non--1 payloads dispatch through an associated object slot +0x90, while -1 payloads use the in-place bitreader and owner slot +0x08.",
-                "This is strong native boundary evidence, but it is not yet a playable implementation. The replacement server still needs to implement this client upload contract and validate it against PCAP/live traffic."
+                serverImplementationUpdated
+                    ? "The current server implementation contains the audited payload-object decoder, owner-slot8/associated-slot90 routing, and runtime state evidence for this client-upload contract. This is still not NativeSourceInputReady until hard markerless PCAP/live uploads validate as native descriptors or a pre-payload wire transform is recovered."
+                    : "This is strong native boundary evidence, but it is not yet a playable implementation. The replacement server still needs to implement this client upload contract and validate it against PCAP/live traffic."
             ]);
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, JsonOptions));
         return report;
+    }
+
+    private static string FindImplementationRoot(string outputPath)
+    {
+        var current = Path.GetFullPath(outputPath);
+        var directory = File.Exists(current)
+            ? Path.GetDirectoryName(current)
+            : Directory.Exists(current)
+                ? current
+                : Path.GetDirectoryName(current);
+        while (!string.IsNullOrEmpty(directory))
+        {
+            if (File.Exists(Path.Combine(directory, "PlasmaGameManager.sln"))
+                && Directory.Exists(Path.Combine(directory, "src")))
+            {
+                return directory;
+            }
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        return Directory.GetCurrentDirectory();
+    }
+
+    private static Tf2Ps3SourceMarkerlessParam2ImplementationEvidence[] DetectServerImplementationEvidence(string implementationRootPath)
+    {
+        var evidence = new[]
+        {
+            new RequiredImplementationEvidence(
+                "payload-object-frame-record",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "public sealed record Ps3SourcePayloadObjectFrame(",
+                "The protocol layer has a typed TF.elf payload-object wrapper model."),
+            new RequiredImplementationEvidence(
+                "payload-buffer-field-offset",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "PayloadObjectBufferFieldOffset = 0x18",
+                "Implements TF.elf payload object +0x18 buffer field."),
+            new RequiredImplementationEvidence(
+                "payload-bitreader-field-offset",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "PayloadObjectBitreaderFieldOffsetValue = 0x1c",
+                "Implements TF.elf payload object +0x1c bitreader field."),
+            new RequiredImplementationEvidence(
+                "payload-length-field-offset",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "PayloadObjectLengthFieldOffset = 0x40",
+                "Implements TF.elf payload object +0x40 decoded length field."),
+            new RequiredImplementationEvidence(
+                "payload-owner-length-field-offset",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "PayloadObjectOwnerLengthFieldOffset = 0x44",
+                "Implements TF.elf payload object +0x44 owner/raw length field."),
+            new RequiredImplementationEvidence(
+                "owner-slot8-control-kind",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "Ps3SourcePayloadObjectFrameKind.OwnerSlot8Control",
+                "Recognizes payload first-word -1 owner slot +0x08 dispatch frames."),
+            new RequiredImplementationEvidence(
+                "fragment-special-wrapper-kind",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "Ps3SourcePayloadObjectFrameKind.FragmentedSpecialWrapper",
+                "Recognizes payload first-word -2 fragment/reassembly wrappers."),
+            new RequiredImplementationEvidence(
+                "associated-object-token-kind",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientPayloadClassifier.cs",
+                "Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken",
+                "Recognizes associated object tokens routed through slot +0x90."),
+            new RequiredImplementationEvidence(
+                "owner-slot8-bitstream-decoder",
+                "src/PlasmaGameManager.Protocol/Ps3SourceClientNetMessageDecoder.cs",
+                "TryDecodeOwnerSlot8Bitstream",
+                "Decodes owner-slot8 bitstream-wrapped CLC/client command bodies."),
+            new RequiredImplementationEvidence(
+                "payload-object-boundary-resolver",
+                "src/PlasmaGameManager.Protocol/Ps3SourceNativeToClcMoveBoundaryResolver.cs",
+                "TryResolveOwnerSlot8Bitstream",
+                "Resolves native payload-object wrappers into CLC move/client command boundaries."),
+            new RequiredImplementationEvidence(
+                "payload-object-inner-payload-metadata",
+                "src/PlasmaGameManager.Protocol/Ps3SourceNativeToClcMoveBoundaryResolver.cs",
+                "PayloadObjectInnerPayload",
+                "Carries decoded inner-payload metadata through the native boundary resolver."),
+            new RequiredImplementationEvidence(
+                "payload-frame-kind-state",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "LastClientSourcePayloadObjectFrameKind = clientPayload.PayloadObjectFrameKind",
+                "Runtime state records the decoded TF.elf payload-object frame kind."),
+            new RequiredImplementationEvidence(
+                "transport-control-context-applied",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "ApplyNativeSourceTransportControlContext(clientPayload);",
+                "Runtime processing applies native Source transport-control context before command decoding."),
+            new RequiredImplementationEvidence(
+                "decoded-client-net-message-applied",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "ApplyDecodedClientNetMessage(clientPayload, body);",
+                "Runtime processing feeds payload-object bodies into the native client net-message decoder."),
+            new RequiredImplementationEvidence(
+                "client-command-intent-applied",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "ApplyClientCommandIntent(clientPayload, body);",
+                "Runtime processing converts decoded client uploads into server-side command intent."),
+            new RequiredImplementationEvidence(
+                "owner-slot8-semantic-context",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "\"owner-slot8-control\"",
+                "Runtime evidence logs owner slot +0x08 payload-object dispatch contexts."),
+            new RequiredImplementationEvidence(
+                "associated-slot90-semantic-context",
+                "src/PlasmaGameManager.Server/GameManagerState.cs",
+                "\"associated-slot90\"",
+                "Runtime evidence logs associated object slot +0x90 payload-object dispatch contexts."),
+            new RequiredImplementationEvidence(
+                "owner-forwarder-bitstream-context",
+                "src/PlasmaGameManager.Protocol/Ps3SourceNativeToClcMoveBoundaryResolver.cs",
+                "OwnerForwarderBitstream",
+                "Runtime boundary resolver covers owner-forwarder bitstream wrapper variants.")
+        };
+
+        return evidence
+            .Select(item =>
+            {
+                var path = Path.Combine(implementationRootPath, item.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                var found = File.Exists(path)
+                    && File.ReadAllText(path).Contains(item.Needle, StringComparison.Ordinal);
+                return new Tf2Ps3SourceMarkerlessParam2ImplementationEvidence(
+                    item.Id,
+                    item.RelativePath,
+                    item.Needle,
+                    item.Meaning,
+                    found);
+            })
+            .ToArray();
     }
 
     private static Tf2Ps3SourceMarkerlessParam2Entry BuildEntry(
@@ -372,6 +520,12 @@ public static class Tf2Ps3SourceMarkerlessParam2BuilderReducer
         string Needle,
         string Meaning);
 
+    private sealed record RequiredImplementationEvidence(
+        string Id,
+        string RelativePath,
+        string Needle,
+        string Meaning);
+
     private sealed record ExportedFunction(
         string Name,
         string Address,
@@ -386,11 +540,13 @@ public sealed record Tf2Ps3SourceMarkerlessParam2BuilderReport(
     Tf2Ps3SourceMarkerlessParam2BuilderSummary Summary,
     Tf2Ps3SourceMarkerlessParam2Entry[] Entries,
     Tf2Ps3SourceMarkerlessParam2BuilderGate[] Gates,
+    Tf2Ps3SourceMarkerlessParam2ImplementationEvidence[] ServerImplementationEvidence,
     string[] Conclusions);
 
 public sealed record Tf2Ps3SourceMarkerlessParam2BuilderInputs(
     string CExportInput,
-    string RecvBitreaderCensusReport);
+    string RecvBitreaderCensusReport,
+    string ImplementationRoot);
 
 public sealed record Tf2Ps3SourceMarkerlessParam2BuilderSummary(
     string BuilderFunction,
@@ -411,6 +567,9 @@ public sealed record Tf2Ps3SourceMarkerlessParam2BuilderSummary(
     bool ConcretePayloadObjectBoundaryRecovered,
     bool ServerImplementationUpdated,
     bool NativeSourceInputReady,
+    int ServerImplementationEvidenceFoundCount,
+    int ServerImplementationEvidenceMissingCount,
+    string[] ServerImplementationMissingEvidenceIds,
     int OpenGateCount);
 
 public sealed record Tf2Ps3SourceMarkerlessParam2Entry(
@@ -434,3 +593,10 @@ public sealed record Tf2Ps3SourceMarkerlessParam2BuilderGate(
     string Status,
     string EvidenceSource,
     string Meaning);
+
+public sealed record Tf2Ps3SourceMarkerlessParam2ImplementationEvidence(
+    string Id,
+    string RelativePath,
+    string Needle,
+    string Meaning,
+    bool Found);

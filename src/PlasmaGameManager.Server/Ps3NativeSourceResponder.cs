@@ -1,40 +1,22 @@
 using System.Text;
+using System.Security.Cryptography;
 using PlasmaGameManager.Protocol;
 
 namespace PlasmaGameManager.Server;
 
 public sealed class Ps3NativeSourceResponder
 {
-    public const string ImplementationLabel = "ps3-native-generated-sparse-snapshot-v20-frozen-state-client-graph";
+    public const string ImplementationLabel = "ps3-native-generated-sparse-snapshot-v22-live-sparse-mapload";
     private const int FragmentPayloadThresholdBytes = 1000;
     private const int QueuedPeerChunkPayloadBytes = 1000;
     private const int SteadyCommandSnapshotClientPacketInterval = 16;
     private const int FastCommandSnapshotClientPacketInterval = 3;
     private const int MinimumCommandSnapshotClientPacketCount = 32;
     private const int FastCommandSnapshotMaxClientPacketCount = 66;
-    private static readonly byte[] PostRosterLargeClientAckBody = Convert.FromHexString(
-        "a23f118cd163aa55f0252338f1f8120e74f62066ab9dc80b982a93b3339f043c6c07ac5de1fe308ffd59a55fa2");
-    private static readonly byte[] PostRosterContinuationBody = Convert.FromHexString(
-        "066ce64dbe63ee9f7fa821cf94a5bd1b7a0da0ec051843770e653e7767c5af88bdf1d705b9e0ce03d7454f5ce5f48019ddbdd4b22ff49b3f8822aa84727fe395e9af9f9d7c61bb87eda458c76ca6e2cae36161c41682cd4598e52d0da183b3e385b8bfa35a323334fe43ea69c71d655acff7256433b2736709561bdaa2435552f1c3065863c8d03306de73bb8a66b1487e4394dff0a6ae2e4ab0ca76712bebb7c7a893e6923ec7a4233947f2b9dd8430078b595c12506df7d8a96b86ed065ba428acbda78294139885345f1447836be3991eaff20e8b4e6bc95c0c");
-    private static readonly byte[] PostRosterClientBatchAckBody = Convert.FromHexString(
-        "13fe27dd132371ae5dfeddf2e9c9a5466990a704ba19b7f4332914f58876e097");
-    private static readonly byte[] PostRosterShortGameplayAckPrefix = Convert.FromHexString(
-        "52983a3e59c6ea1fdea9130e746c3a0511291bd466f5aa4a1a9cd0f002b81743b0d3a5cc13de92f502d0398b");
-    private static readonly byte[] PostRosterFrozenStateIntroPrefix = Convert.FromHexString(
-        "b246eb36c35504f1e4006d60e435ef7f5c375b6563e6fab319");
-    private static readonly byte[] PostRosterFrozenStatePlayerPrefix = Convert.FromHexString(
-        "1b336d4e");
-    private static readonly byte[] PostRosterFrozenStateFocusPrefix = Convert.FromHexString(
-        "5594a53c9e7ca81e3746fcbbc0052ec38dc332ee0d7c7d");
-    private static readonly byte[] EarlyLoadLargeCommandContinuationPrefix = Convert.FromHexString(
-        "595ddd1340bea4edab092b7633902422d685173b698dce5e1c3bb7bf7b89bab064816d74a004ec657e714b02b977522b87a0e2e1cb9e3e88c9345dcfcec67fd70316f3623c3fc510b5d6ed5618214d2f95047451bd3da8110ea47dacb9985c1ee9005b9697686bc7a412ae7e391dec76c8cd3e48ed021931c3225b7941f4aced2d09b9f12dd164c9bfc50448334e1515c6d0ba18002b47e0aa6331254aa2a5b683ba53d2ab8427bf21b571317ea59eb10c1991d23ed262e36e8e8dfcca730381204346e9f003d5893ec782c64aaeae1adad3b59c0c1494813b0c7007329da7bb2955dd0c631a34d611218b8e5ecde3d4d0213bda9928a0a9d86118876acd498d5bd9a4ba162e4783821af327e79d6aff888d7583e35dd73ca7d5fe5bc0a59d60b440686bf4ef8e8f3b9ee6af3f1784f46550c75a0f109006c5b38886c9692ccdb4e440946716b7c527950ede599409401984771bdfa49257246a5baac5a2e40c1ea9d10e5d433f125f5a64928edaccf02ba00bad30c9798a523f7075e1d94dde9f33af0499a6678867be09dacab937344af1b813f30eab7862b78028e7c2bf5da55c0c4db91baa99d12432f4c6efabcbacd47b61f8c02b6c20f2b2ff5c442ad5f530ebf28df8058e26572d79db9a67c4f14a2a541904213f80ea686679c8cb6a9e0e9f1f5dc9958ffb8f1d3c4e20cab7b64e632e84b2cb885af44acb20104d4da545661358aa56f990c49f118b0c92ac6e265c756d5c2fb370c4e68caae5efde8f1d90c79bf5ef369d779d828bee6324d72eaad93d23823c28883f184c49c729c0adc0963c22");
-    private static readonly byte[] QuickMatchTerminalPrompt1Body = Convert.FromHexString(
-        "62e6413e138a4ed096b9406ffe5fad9635c8ddeeff6616dc57450604e51d44d19990920143e80d5fc5464185fa24267b7198dd94ec71811fc079e2a12db07dae97aa9951506bda78f05d8a5ecf56e7f2811a3e5e38bf1a4346e89122dfee06198af524dd90a3c1784f5052675fb3536e971f4f1206b3022763a25df64465aae729b14f2cac1c2cf042ca430276af450907d3a20c1bb42904331f62d37816aa730cd5339b5ad39dfbf3082aafcf0a141dc97b9613e93b10136a542ae903eb255154ed0bea449f62d888c25cd80fc552a9c3de0dcfedc468c77f16fe9c3f6a3217e2c772990414c70b2958c08931cda5afbd701a2be812c71cdec7aae006111116e86ea5a7cdd8c1eaac9404ef5bd43f4ed53215a3789ae4c8837191bef0abbb9599ee728949c56bd6134fac2ddb38fc78952c8024ad854af512ef74431a6c030ad10d579b74af9967f7313a36323ba3db7882efb4ee1528ed447e01668215359d7fe2126bb56a02fa9e52bf550f042bc3d84ad8a0859c82ff099376873bcf3b65ff7edf804df74e5bdaadbb88d2c32a1cf34fb1224b9d34d846825319a89ac97c1d92a898a73dba3ddab8edad7a3453a92ae86f2f6d8440591b9bd57b3d96da1be3f1869b9934896b415ecd3506ad6530edc62910b51181693350ccf033519297142ea03e3e9d810ad78cb61f9a633ad7a232bf6edd163a763fa412c043105025b33bf29c26803a66d9baf33bdd9d540d06a1f7f4fb5d2e96e1e3d1892bb9eb6652cf4fc32c19aa2e63925d9e57874280726e30c16b608210ecddc2ebb2b4");
-    private static readonly byte[] QuickMatchTerminalPrompt2Body = Convert.FromHexString(
-        "40cac21cfe0ce51a8cc4666e97e9a0fd038142d1fcc23d552516266c35372fcb102bfcbd758ff5d3d7095cb5fd5a3541490631a7440eb5b15b2a61f07d7965f11ceb324e37ff5e59c9d7a66ac2028fe7bdb3530b08a55453bda0f5f2efcebcecde6cf6d3fd379245af9656fdbf0338297377b98c1f93c4a4527855f7c0ddca52a062aaa39646ce6393ab13a08698c990efc7e4a7bbf104e6149a52b6c2803cec2f5ee109e73ca261f0f4b9ede8d51d3ab6e534c5b592ec1748a03e24cc75b39c8d30cda2d93d94c60751e2e00553226096b4e476f6c8e9eed72bffc2120fdcd510c16be2e78467ecb8ff521ffed5f6bd5899bc1013e975477b284cd7b58307c8fbd67e036a16dbdfdd25b2a79e12652017884d0c6009d04d5e5c278f74d210b2bb654e2ca86145b013f56ebb49cbc5a1f7d5031e6d5b4aa626c1b899ea8fc771e2dbcf4fec890d6f3120048f090664083030a1a2ca2b5d8a585c02ccc27ac72bda5aba101da3aec361a590ce25d42078d5b2434864355879910246c487c94006e8a78fa5a845302ecf87008eeadf323fe1b9e1798d933fba1acb70d54e81e5747220b31fc17660dfe8b559f8bc70ff25f940dab31c52fce3870c0390c28c003fe45bd6062e6b966b6625b99984f5e53b001508c89ee71754f9a89635345bc5db66751ad14c75b2c659df827eb0a12717e6df8a1169d09aa0e60dafbeda3c2b184914e85e445c16bd340297e26df2d64489081d0ba6021f002e82075dbacea24b5e0c5b0a71d26a3b84a4fabc6880987f6251e5c0");
-    private static readonly byte[] PostTerminalMapLoadStateAckPrefix = Convert.FromHexString(
-        "0782c6a02fa2251502dccc22f9ea43e07f94b56b8be89ae0bf96070f88aeaa990b787336cf24b2b10bc3eb719885546320ead6ec631b18ca0c22cdfc050c1e2e8be178b6afd08f2c1710b83cb89edeb2605de776addf1845808a66dffc9a0e516723");
+    private const int QuickMatchTerminalPrompt1TargetLength = 620;
+    private const int QuickMatchTerminalPrompt2TargetLength = 564;
     public const ushort SparseQuickMatchLateLoadingSequence = 1000;
+    private const ushort SparseQuickMatchRosterHandoffSequence = 1114;
     public const int FirstCommandSnapshotClientPacketCount = MinimumCommandSnapshotClientPacketCount;
     public const int CommandSnapshotClientPacketInterval = SteadyCommandSnapshotClientPacketInterval;
     private static readonly int[] ObjectStateIntroTurnBatchCounts = [3, 4, 2, 1];
@@ -47,140 +29,140 @@ public sealed class Ps3NativeSourceResponder
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 196, 24, 8),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
-            new(LoadingContinuationFrameKind.HighEntropy, 1128),
-            new(LoadingContinuationFrameKind.HighEntropy, 846)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1128),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 846)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 982)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 704)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 982)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 704)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 982),
-            new(LoadingContinuationFrameKind.HighEntropy, 944),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 982),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 944),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 944)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 944)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 714),
-            new(LoadingContinuationFrameKind.HighEntropy, 1184),
-            new(LoadingContinuationFrameKind.HighEntropy, 282),
-            new(LoadingContinuationFrameKind.HighEntropy, 460)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 714),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1184),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 282),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 460)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 42, 10, 2),
-            new(LoadingContinuationFrameKind.HighEntropy, 1198),
-            new(LoadingContinuationFrameKind.HighEntropy, 564)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1198),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 564)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 450)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 450)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 1138),
-            new(LoadingContinuationFrameKind.HighEntropy, 338)
-        ],
-        [
-            new(LoadingContinuationFrameKind.HighEntropy, 450),
-            new(LoadingContinuationFrameKind.HighEntropy, 1180),
-            new(LoadingContinuationFrameKind.HighEntropy, 634)
-        ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 676)],
-        [
-            new(LoadingContinuationFrameKind.HighEntropy, 1079),
-            new(LoadingContinuationFrameKind.HighEntropy, 958),
-            new(LoadingContinuationFrameKind.HighEntropy, 450)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1138),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 338)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 28),
-            new(LoadingContinuationFrameKind.HighEntropy, 686),
-            new(LoadingContinuationFrameKind.HighEntropy, 846)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 450),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1180),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 634)
+        ],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 676)],
+        [
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1079),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 958),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 450)
         ],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 704),
-            new(LoadingContinuationFrameKind.HighEntropy, 1156)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 686),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 846)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 574)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 196),
-            new(LoadingContinuationFrameKind.HighEntropy, 1156),
-            new(LoadingContinuationFrameKind.HighEntropy, 620)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 704),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1156)
+        ],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 574)],
+        [
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 196),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1156),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 620)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 206, 14, 8),
-            new(LoadingContinuationFrameKind.HighEntropy, 282),
-            new(LoadingContinuationFrameKind.HighEntropy, 1111),
-            new(LoadingContinuationFrameKind.HighEntropy, 300)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 282),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1111),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 300)
         ],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 638),
-            new(LoadingContinuationFrameKind.HighEntropy, 1128),
-            new(LoadingContinuationFrameKind.HighEntropy, 338)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 638),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1128),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 338)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 168, 24, 7),
-            new(LoadingContinuationFrameKind.HighEntropy, 874)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 874)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 1222)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 1212)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 1222)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 1212)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 206),
-            new(LoadingContinuationFrameKind.HighEntropy, 1212),
-            new(LoadingContinuationFrameKind.HighEntropy, 296)
-        ],
-        [
-            new(LoadingContinuationFrameKind.HighEntropy, 944),
-            new(LoadingContinuationFrameKind.MixedBinary, 66),
-            new(LoadingContinuationFrameKind.HighEntropy, 1128),
-            new(LoadingContinuationFrameKind.HighEntropy, 338)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 206),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1212),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 296)
         ],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 450),
-            new(LoadingContinuationFrameKind.HighEntropy, 1138),
-            new(LoadingContinuationFrameKind.HighEntropy, 846)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 944),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1128),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 338)
+        ],
+        [
+            new(LoadingContinuationFrameKind.NativeSnapshot, 450),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1138),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 846)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 182, 14, 7),
-            new(LoadingContinuationFrameKind.HighEntropy, 592),
-            new(LoadingContinuationFrameKind.HighEntropy, 1142),
-            new(LoadingContinuationFrameKind.HighEntropy, 602)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 592),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1142),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 602)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 514)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 514)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 196),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 196),
             new(LoadingContinuationFrameKind.PlayerStateLink, 220, 14, 8),
             new(LoadingContinuationFrameKind.PlayerStateLink, 168, 24, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
-            new(LoadingContinuationFrameKind.MixedBinary, 206)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 206)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 196)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 196)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 210, 14, 8)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 220),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 220),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 196, 24, 8),
-            new(LoadingContinuationFrameKind.MixedBinary, 28)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 206)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 206)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 52, 16, 3)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4),
             new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 38),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 10)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 10)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 21)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 28)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 10)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 10)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4, SuppressAfter: 1)
@@ -189,53 +171,53 @@ public sealed class Ps3NativeSourceResponder
             new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 24, 4, 2)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 48)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 28)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 48)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 10),
-            new(LoadingContinuationFrameKind.MixedBinary, 21),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 10),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21),
             new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4)
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 24),
-            new(LoadingContinuationFrameKind.MixedBinary, 28)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 24),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28)
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5, SuppressAfter: 1)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 66, 18, 4, SuppressAfter: 1)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 28),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 28),
             new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 21)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 10)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 10)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 21),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21),
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2)
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 91, 13, 6)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 52, 16, 3)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21, SuppressAfter: 2)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21, SuppressAfter: 2)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 91, 13, 6)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2),
-            new(LoadingContinuationFrameKind.MixedBinary, 21)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4)
@@ -244,26 +226,26 @@ public sealed class Ps3NativeSourceResponder
             new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5),
             new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2, SuppressAfter: 1)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 38),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4)
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 24, 4, 2)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4),
-            new(LoadingContinuationFrameKind.MixedBinary, 21)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 49)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 49)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 21),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4),
-            new(LoadingContinuationFrameKind.MixedBinary, 38)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 24, 4, 2),
@@ -271,63 +253,63 @@ public sealed class Ps3NativeSourceResponder
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2, SuppressAfter: 1)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 52, 16, 3)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5),
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2, SuppressAfter: 1)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 38),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 31)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 31)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2, SuppressAfter: 1)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 48),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 48),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2, SuppressAfter: 1)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 94, 14, 7, SuppressAfter: 1)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4),
             new(LoadingContinuationFrameKind.PlayerStateLink, 49, 25, 2, SuppressAfter: 1)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 49)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 49)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2, SuppressAfter: 1)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 77, 13, 5)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 48),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 48),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 10)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 10)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 91, 13, 6),
             new(LoadingContinuationFrameKind.PlayerStateLink, 35, 11, 2)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 21),
-            new(LoadingContinuationFrameKind.MixedBinary, 38)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 66, 18, 4),
             new(LoadingContinuationFrameKind.PlayerStateLink, 28, 4, 2)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 21, SuppressAfter: 1)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 21, SuppressAfter: 1)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 91, 13, 6)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 38)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2),
             new(LoadingContinuationFrameKind.PlayerStateLink, 56, 8, 4)
@@ -336,153 +318,153 @@ public sealed class Ps3NativeSourceResponder
         [new(LoadingContinuationFrameKind.PlayerStateLink, 63, 15, 4)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 38, 14, 2)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 38),
-            new(LoadingContinuationFrameKind.HighEntropy, 1149),
-            new(LoadingContinuationFrameKind.HighEntropy, 846)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 38),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1149),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 846)
         ],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 436),
-            new(LoadingContinuationFrameKind.HighEntropy, 324),
-            new(LoadingContinuationFrameKind.HighEntropy, 1152),
-            new(LoadingContinuationFrameKind.HighEntropy, 479)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 436),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 324),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 1152),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 479)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 196),
-            new(LoadingContinuationFrameKind.HighEntropy, 216),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 196),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 216),
             new(LoadingContinuationFrameKind.PlayerStateLink, 182, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 84, 12, 6)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 685)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 579)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 564)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 685)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 579)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 564)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 602),
-            new(LoadingContinuationFrameKind.HighEntropy, 606),
-            new(LoadingContinuationFrameKind.HighEntropy, 860)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 602),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 606),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 860)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 320)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 564)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 606)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 320)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 564)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 606)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 602),
-            new(LoadingContinuationFrameKind.HighEntropy, 860)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 602),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 860)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 574)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 574)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 578),
-            new(LoadingContinuationFrameKind.HighEntropy, 620),
-            new(LoadingContinuationFrameKind.HighEntropy, 588)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 578),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 620),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 588)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 592)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 564)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 588)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 592)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 564)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 588)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 411),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 411),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 66),
-            new(LoadingContinuationFrameKind.MixedBinary, 84)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 84)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 122, 10, 9),
             new(LoadingContinuationFrameKind.PlayerStateLink, 84, 12, 6),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 66),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66),
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 112, 14, 8),
             new(LoadingContinuationFrameKind.PlayerStateLink, 80, 8, 6)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 56),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56),
             new(LoadingContinuationFrameKind.PlayerStateLink, 122, 10, 9),
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 80, 8, 6)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
             new(LoadingContinuationFrameKind.PlayerStateLink, 122, 10, 9),
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 66)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
             new(LoadingContinuationFrameKind.PlayerStateLink, 112, 14, 8),
             new(LoadingContinuationFrameKind.PlayerStateLink, 108, 12, 8),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 66)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 126, 14, 9),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 66)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 84),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 84),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
             new(LoadingContinuationFrameKind.PlayerStateLink, 122, 10, 9),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 94)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 94)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7)],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 94, 14, 7)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5),
-            new(LoadingContinuationFrameKind.MixedBinary, 56),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56),
             new(LoadingContinuationFrameKind.PlayerStateLink, 108, 12, 8)
         ],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 84, 12, 6),
-            new(LoadingContinuationFrameKind.MixedBinary, 66, SuppressAfter: 1)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66, SuppressAfter: 1)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 84, 12, 6),
             new(LoadingContinuationFrameKind.PlayerStateLink, 136, 12, 10),
             new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 66)],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 136, 12, 10),
-            new(LoadingContinuationFrameKind.MixedBinary, 56)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)
         ],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 56),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56),
             new(LoadingContinuationFrameKind.PlayerStateLink, 94, 14, 7),
             new(LoadingContinuationFrameKind.PlayerStateLink, 112, 14, 8),
-            new(LoadingContinuationFrameKind.MixedBinary, 94)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 94)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
         [
-            new(LoadingContinuationFrameKind.MixedBinary, 56),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56),
             new(LoadingContinuationFrameKind.PlayerStateLink, 274, 18, 18),
             new(LoadingContinuationFrameKind.PlayerStateLink, 98, 14, 7),
-            new(LoadingContinuationFrameKind.MixedBinary, 56),
-            new(LoadingContinuationFrameKind.MixedBinary, 94)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56),
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 94)
         ],
         [new(LoadingContinuationFrameKind.PlayerStateLink, 70, 10, 5)],
         [
             new(LoadingContinuationFrameKind.PlayerStateLink, 126, 14, 9),
-            new(LoadingContinuationFrameKind.MixedBinary, 66)
+            new(LoadingContinuationFrameKind.NativeQueuedBoundary, 66)
         ],
-        [new(LoadingContinuationFrameKind.MixedBinary, 56)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 609)],
+        [new(LoadingContinuationFrameKind.NativeQueuedBoundary, 56)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 609)],
         [
-            new(LoadingContinuationFrameKind.HighEntropy, 606),
-            new(LoadingContinuationFrameKind.HighEntropy, 606)
+            new(LoadingContinuationFrameKind.NativeSnapshot, 606),
+            new(LoadingContinuationFrameKind.NativeSnapshot, 606)
         ],
-        [new(LoadingContinuationFrameKind.HighEntropy, 574)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 564)],
-        [new(LoadingContinuationFrameKind.HighEntropy, 860, SuppressAfter: 1)]
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 574)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 564)],
+        [new(LoadingContinuationFrameKind.NativeSnapshot, 860, SuppressAfter: 1)]
     ];
     private static readonly LoadingContinuationFrame[] Variant2LoadingBurstFrames = ParseLoadingFrameLine("1098H;846H");
     private static readonly LoadingContinuationFrame[] Variant2LoadingPostBurstFrames = ParseLoadingFrameLine("704H;954L;28M");
@@ -1089,6 +1071,13 @@ public sealed class Ps3NativeSourceResponder
         }
 
         var responses = new List<Ps3NativeSourceResponse>(10);
+        var clientHasEmbeddedObjectState = HasEmbeddedObjectState(clientBodyForHandling);
+        if (clientHasEmbeddedObjectState && state.InitialSetupVariant == 1 && !state.SentObjectState)
+        {
+            state.SawInitialClientFrozenStateUpload = true;
+            state.PendingInitialClientFrozenStateUpload = true;
+        }
+
         if (!state.SentInitialSetup)
         {
             state.InitialSetupVariant = InitialSetupVariant(clientPacket.Body);
@@ -1115,18 +1104,30 @@ public sealed class Ps3NativeSourceResponder
 
         if (!state.SentServerInfo && state.ClientPacketCount >= 2)
         {
-            AddPacket(responses, state, BuildServerInfoBody(game, player, 112), "generated PS3 Source native 0x49 server-info bitstream");
-            if (state.InitialSetupVariant == 2)
+            if (state.InitialSetupVariant == 1)
             {
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 17, 0x49), "generated PS3 Source native server-info short tail");
+                AddPacket(
+                    responses,
+                    state,
+                    BuildQuickMatchSetupContinuationBody(game, player, state),
+                    "generated PS3 Source native quick-match setup continuation");
+                state.SentQuickMatchSetupContinuation = true;
+                state.SentServerInfo = true;
+                return responses;
             }
-            else if (state.InitialSetupVariant == 4)
+
+            AddCriticalSourceObjectStreamBootstrapResponses(
+                responses,
+                state,
+                game,
+                player,
+                "generated PS3 Source native server-info/sign-on object-stream bootstrap batch");
+            if (state.InitialSetupVariant == 4)
             {
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 17, 0x49), "generated PS3 Source native custom-match server-info short tail");
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 17, 0x4a), "generated PS3 Source native custom-match server-info short tail");
                 state.SuppressObjectStateIntroResponses = Math.Max(state.SuppressObjectStateIntroResponses, 1);
             }
 
+            state.SentCriticalSourceNetMessageBootstrap = true;
             state.SentServerInfo = true;
             if (state.InitialSetupVariant != 1)
             {
@@ -1152,8 +1153,15 @@ public sealed class Ps3NativeSourceResponder
             return responses;
         }
 
+        if (state.InitialSetupVariant == 1
+            && state.PendingInitialClientFrozenStateUpload
+            && clientHasEmbeddedObjectState)
+        {
+            return responses;
+        }
+
         var sentObjectIntroThisTurn = false;
-        if (!state.SentObjectState && ShouldSendObjectState(state, player, clientBodyForHandling))
+        if (!state.SentObjectState && ShouldSendObjectState(state, player, clientHasEmbeddedObjectState))
         {
             if (state.SuppressObjectStateIntroResponses > 0)
             {
@@ -1163,6 +1171,7 @@ public sealed class Ps3NativeSourceResponder
             }
 
             state.SentObjectState = true;
+            state.PendingInitialClientFrozenStateUpload = false;
             AddNextObjectStateIntroTurn(responses, state, game, player);
             sentObjectIntroThisTurn = true;
         }
@@ -1205,6 +1214,11 @@ public sealed class Ps3NativeSourceResponder
             && !state.SentLoadingPostBurstContinuation)
         {
             responses.Clear();
+            if (ConsumeSilentLoadingContinuationResponse(state))
+            {
+                return responses;
+            }
+
             if (state.SuppressLoadingContinuationResponses > 0)
             {
                 state.SuppressLoadingContinuationResponses--;
@@ -1214,7 +1228,6 @@ public sealed class Ps3NativeSourceResponder
 
             if (state.InitialSetupVariant == 1 && state.ClientPacketCount - state.LoadingStateLinkBurstClientPacketCount <= 1)
             {
-                AddFallbackShortControlIfNeeded(responses, state, clientPacket.CandidateSequence, "generated PS3 Source short control/ack for loading post-burst gate");
                 return responses;
             }
 
@@ -1250,6 +1263,11 @@ public sealed class Ps3NativeSourceResponder
             }
 
             responses.Clear();
+            if (ConsumeSilentLoadingContinuationResponse(state))
+            {
+                return responses;
+            }
+
             if (state.SuppressLoadingContinuationResponses > 0)
             {
                 state.SuppressLoadingContinuationResponses--;
@@ -1281,9 +1299,14 @@ public sealed class Ps3NativeSourceResponder
 
         if (state.SentLoadingPostBurstContinuation
             && !state.SentRosterDescriptorState
-            && state.SuppressLoadingContinuationResponses > 0)
+            && state.SuppressLoadingContinuationResponses != 0)
         {
             responses.Clear();
+            if (ConsumeSilentLoadingContinuationResponse(state))
+            {
+                return responses;
+            }
+
             state.SuppressLoadingContinuationResponses--;
             AddFallbackShortControlIfNeeded(responses, state, clientPacket.CandidateSequence, "generated PS3 Source short control/ack for loading continuation pacing");
             return responses;
@@ -1294,7 +1317,12 @@ public sealed class Ps3NativeSourceResponder
             && !state.SentRosterDescriptorState
             && state.ClientPacketCount % 8 == 0)
         {
-            AddPacket(responses, state, BuildPlayerStateLinkBody(game, player, 30, 4), "generated PS3 Source native PNG state-link heartbeat", sequenceAdvance: 3);
+            AddPacket(
+                responses,
+                state,
+                BuildPlayerStateLinkSlotReplacementPayload(game, player, state, 30, 0x8f, 89, "pre-roster-state-link-heartbeat"),
+                "generated PS3 Source native compact state-link heartbeat",
+                sequenceAdvance: 3);
         }
 
         if (!sentObjectIntroThisTurn && ObjectStateIntroComplete(state, game, player) && !state.SentRosterDescriptorState)
@@ -1329,13 +1357,8 @@ public sealed class Ps3NativeSourceResponder
             && ShouldStartPostRosterContinuation(state, player, clientPacket))
         {
             responses.Clear();
-            AddPacket(
-                responses,
-                state,
-                PostRosterLargeClientAckBody,
-                "generated PS3 Source native post-roster large-client ack",
-                sequenceAdvance: 12);
-            state.PostRosterContinuationStage = 1;
+            AddPostRosterMapLoadContinuationResponse(responses, state, game, player);
+            state.PostRosterContinuationStage = 2;
             state.QuickMatchTerminalPromptStage = 0;
             return responses;
         }
@@ -1343,6 +1366,20 @@ public sealed class Ps3NativeSourceResponder
         if (state.SentRosterDescriptorState)
         {
             AddPendingSourceServerCommandEvents(responses, state, game, player);
+        }
+
+        if (state.SentRosterDescriptorState
+            && ShouldSendSparseQuickMatchTerminalMapLoadAfterShortAck(state, player, clientPacket))
+        {
+            responses.Clear();
+            AddQuickMatchTerminalObjectStreamBootstrapResponses(responses, state, game, player);
+            state.SentQuickMatchTerminalMapLoad = true;
+            state.SentLateLargeCommandContinuation = true;
+            state.QuickMatchTerminalPromptStage = 3;
+            state.QuickMatchTerminalPrompt1WaitClientPacketCount = 0;
+            state.LateLargeCommandFollowupClientPacketCount = 0;
+            state.PostTerminalMapLoadClientPacketCount = 0;
+            return responses;
         }
 
         if (state.SentRosterDescriptorState
@@ -1361,7 +1398,7 @@ public sealed class Ps3NativeSourceResponder
             AddPacket(
                 responses,
                 state,
-                QuickMatchTerminalPrompt2Body,
+                BuildQuickMatchTerminalPrompt2Body(game, player),
                 "generated PS3 Source native quick-match terminal upload prompt 2 for late direct upload",
                 sequenceAdvance: 141);
             state.QuickMatchTerminalPromptStage = 2;
@@ -1375,6 +1412,17 @@ public sealed class Ps3NativeSourceResponder
             AddPostRosterFrozenStateBatches(responses, state, game, player);
             state.PendingPostRosterFrozenStateUpload = false;
             state.SentPostRosterFrozenStateBatches = true;
+            state.WaitingForPostRosterFrozenStateContinuation = true;
+
+            return responses;
+        }
+
+        if (state.SentRosterDescriptorState
+            && ShouldSendPostRosterFrozenStateContinuation(state, clientPacket))
+        {
+            responses.Clear();
+            AddPostRosterFrozenStateContinuationResponses(responses, state, game, player);
+            state.WaitingForPostRosterFrozenStateContinuation = false;
             return responses;
         }
 
@@ -1394,8 +1442,8 @@ public sealed class Ps3NativeSourceResponder
             AddPacket(
                 responses,
                 state,
-                PostRosterClientBatchAckBody,
-                "generated PS3 Source native post-roster client object-batch ack",
+                BuildPostRosterClientObjectBatchAckBody(game, player),
+                "generated PS3 Source native post-roster client object-batch snapshot ack",
                 sequenceAdvance: 9);
             state.SentPostRosterMapLoadClientBatchAck = true;
             return responses;
@@ -1408,7 +1456,7 @@ public sealed class Ps3NativeSourceResponder
             AddPacket(
                 responses,
                 state,
-                BuildPostRosterShortGameplayAckBody(player),
+                BuildPostRosterShortGameplayAckBody(game, player),
                 "generated PS3 Source native post-roster short gameplay ack",
                 sequenceAdvance: 9);
             state.SentPostRosterShortGameplayAck = true;
@@ -1422,10 +1470,11 @@ public sealed class Ps3NativeSourceResponder
             AddPacket(
                 responses,
                 state,
-                QuickMatchTerminalPrompt1Body,
+                BuildQuickMatchTerminalPrompt1Body(game, player),
                 "generated PS3 Source native quick-match terminal upload prompt 1",
                 sequenceAdvance: 144);
             state.QuickMatchTerminalPromptStage = 1;
+            state.QuickMatchTerminalPrompt1WaitClientPacketCount = 0;
             return responses;
         }
 
@@ -1460,7 +1509,7 @@ public sealed class Ps3NativeSourceResponder
             AddPacket(
                 responses,
                 state,
-                QuickMatchTerminalPrompt2Body,
+                BuildQuickMatchTerminalPrompt2Body(game, player),
                 "generated PS3 Source native quick-match terminal upload prompt 2",
                 sequenceAdvance: 141);
             state.QuickMatchTerminalPromptStage = 2;
@@ -1475,6 +1524,7 @@ public sealed class Ps3NativeSourceResponder
             state.SentQuickMatchTerminalMapLoad = true;
             state.SentLateLargeCommandContinuation = true;
             state.QuickMatchTerminalPromptStage = 3;
+            state.QuickMatchTerminalPrompt1WaitClientPacketCount = 0;
             state.LateLargeCommandFollowupClientPacketCount = 0;
             state.PostTerminalMapLoadClientPacketCount = 0;
             return responses;
@@ -1484,6 +1534,11 @@ public sealed class Ps3NativeSourceResponder
             && ShouldWaitForQuickMatchTerminalUpload(state, clientPacket.PayloadLength))
         {
             responses.Clear();
+            if (state.QuickMatchTerminalPromptStage == 1)
+            {
+                state.QuickMatchTerminalPrompt1WaitClientPacketCount++;
+            }
+
             return responses;
         }
 
@@ -1491,14 +1546,18 @@ public sealed class Ps3NativeSourceResponder
             && ShouldSendLateLargeCommandOpaqueContinuation(state, player, clientPacket.PayloadLength))
         {
             responses.Clear();
-            AddPacket(
+            AddObjectStreamBootstrapResponses(
                 responses,
                 state,
-                BuildLateLargeCommandOpaqueContinuationBody(game, player, state),
-                "generated PS3 Source native late large-command opaque continuation",
-                sequenceAdvance: 146);
+                game,
+                player,
+                "generated PS3 Source native late large-command object-stream fallback batch");
+            state.SentQuickMatchTerminalMapLoad = true;
             state.SentLateLargeCommandContinuation = true;
+            state.QuickMatchTerminalPromptStage = 3;
+            state.QuickMatchTerminalPrompt1WaitClientPacketCount = 0;
             state.LateLargeCommandFollowupClientPacketCount = 0;
+            state.PostTerminalMapLoadClientPacketCount = 0;
             return responses;
         }
 
@@ -1527,7 +1586,7 @@ public sealed class Ps3NativeSourceResponder
                 AddPacket(
                     responses,
                     state,
-                    BuildPostTerminalMapLoadStateAckBody(player),
+                    BuildPostTerminalMapLoadStateAckBody(game, player, state),
                     "generated PS3 Source native post-terminal map-load state-link ack",
                     sequenceAdvance: 40);
                 state.SentPostTerminalMapLoadStateAck = true;
@@ -1643,6 +1702,67 @@ public sealed class Ps3NativeSourceResponder
         }
     }
 
+    private static bool ShouldSendPostRosterFrozenStateContinuation(
+        Ps3NativeSourceResponderState state,
+        Ps3SourceTransportPacket clientPacket)
+    {
+        return state.WaitingForPostRosterFrozenStateContinuation
+            && !state.SentQuickMatchTerminalMapLoad
+            && state.PostRosterContinuationStage == 0
+            && clientPacket.PayloadLength is >= 250 and <= 340
+            && clientPacket.Body.Length == clientPacket.PayloadLength - 2;
+    }
+
+    private static void AddPostRosterFrozenStateContinuationResponses(
+        List<Ps3NativeSourceResponse> responses,
+        Ps3NativeSourceResponderState state,
+        GameManagerSession game,
+        PlayerSession player)
+    {
+        var playerDisplayName = SourceDisplayName(player);
+        AddPacket(
+            responses,
+            state,
+            BuildFrozenStateObjectBody(
+                game,
+                player,
+                78,
+                4,
+                [(PlayerSourceObjectId(player), playerDisplayName), .. FrozenStateNamedPeers(player).Take(1)]),
+            "generated PS3 Source native post-roster frozen-state continuation COc player batch",
+            sequenceAdvance: 1);
+        AddPacket(
+            responses,
+            state,
+            BuildQueuedBoundaryOnlyBody(
+                game,
+                player,
+                state,
+                32,
+                0xa3,
+                "post-roster-frozen-state-continuation-boundary"),
+            "generated PS3 Source native post-roster frozen-state continuation boundary",
+            sequenceAdvance: 8);
+        AddPacket(
+            responses,
+            state,
+            BuildQueuedBoundaryOnlyBody(
+                game,
+                player,
+                state,
+                21,
+                0xa4,
+                "post-roster-frozen-state-continuation-short-control"),
+            "generated PS3 Source native post-roster frozen-state continuation short control",
+            sequenceAdvance: 6);
+        AddPacket(
+            responses,
+            state,
+            BuildPurePlayerStateLinkBody(player, 2),
+            "generated PS3 Source native post-roster frozen-state continuation PNG state-link without generated prefix",
+            sequenceAdvance: 7);
+    }
+
     private static bool ShouldStartPostRosterContinuation(
         Ps3NativeSourceResponderState state,
         PlayerSession player,
@@ -1699,12 +1819,7 @@ public sealed class Ps3NativeSourceResponder
     {
         if (state.PostRosterContinuationStage == 1)
         {
-            AddPacket(
-                responses,
-                state,
-                PostRosterContinuationBody,
-                "generated PS3 Source native post-roster continuation frame",
-                sequenceAdvance: 55);
+            AddPostRosterMapLoadContinuationResponse(responses, state, game, player);
             state.PostRosterContinuationStage = 2;
             return;
         }
@@ -1746,15 +1861,16 @@ public sealed class Ps3NativeSourceResponder
         var mapName = SourceMapName(game);
         var hostName = string.IsNullOrWhiteSpace(game.Name) ? "A Game" : game.Name;
         var playerName = string.IsNullOrWhiteSpace(player.Name) ? "Player" : player.Name;
-        var stringTablePayload = ToBitPayload(playerName + "\0");
+        var stringTablePayload = BuildUserInfoStringTableData(playerName);
+        var precacheStringTables = BuildBootstrapPrecacheStringTableFrames(mapName);
         var sendTablePayload = ToBitPayload(string.Join('\0', Tf2Ps3SourceCatalog.BootstrapSendTables) + "\0");
         var classInfo = new Ps3SourceSvcClassInfo(
             NumServerClasses: checked((short)Tf2Ps3SourceCatalog.ServerClasses.Count),
             CreateOnClient: false,
             Classes: Tf2Ps3SourceCatalog.ServerClasses);
 
-        return
-        [
+        var frames = new List<Ps3SourceNetMessageFrame>
+        {
             Ps3SourceNetMessages.BuildServerInfoFrame(new Ps3SourceSvcServerInfo(
                 Protocol: 14,
                 ServerCount: 1,
@@ -1783,13 +1899,17 @@ public sealed class Ps3NativeSourceResponder
                 UserDataFixedSize: false,
                 UserDataSize: 0,
                 UserDataSizeBits: 0,
-                Data: stringTablePayload,
-                DataBitCount: stringTablePayload.Length * 8)),
+                Data: stringTablePayload.Payload,
+                DataBitCount: stringTablePayload.BitCount))
+        };
+        frames.AddRange(precacheStringTables);
+        frames.AddRange(
+        [
             Ps3SourceNetMessages.BuildUpdateStringTableFrame(new Ps3SourceSvcStringTableUpdate(
                 TableId: 0,
                 ChangedEntries: 1,
-                Data: stringTablePayload,
-                DataBitCount: stringTablePayload.Length * 8)),
+                Data: stringTablePayload.Payload,
+                DataBitCount: stringTablePayload.BitCount)),
             Ps3SourceNetMessages.BuildPacketEntitiesFrame(new Ps3SourceSvcPacketEntities(
                 MaxEntries: 2047,
                 IsDelta: false,
@@ -1799,7 +1919,120 @@ public sealed class Ps3NativeSourceResponder
                 UpdateBaseline: false,
                 Data: [],
                 DataBitCount: 0))
+        ]);
+
+        return frames;
+    }
+
+    public Ps3SourceNetMessageFrame BuildDiagnosticClassInfoFollowUpAppendFrame(GameManagerSession game, PlayerSession player)
+    {
+        return BuildNativeClassInfoFollowUpRawAppendFrame(game, player);
+    }
+
+    public Ps3SourceNetMessageFrame BuildNativeClassInfoFollowUpRawAppendFrame(GameManagerSession game, PlayerSession player)
+    {
+        return BuildNativeServerSignonBufferFrame(game, player);
+    }
+
+    public Ps3SourceNetMessageFrame BuildNativeServerSignonBufferFrame(GameManagerSession game, PlayerSession player)
+    {
+        // TF.elf 00a56cb0 appends a cached +0xd8/+0xe4 bit-buffer immediately after
+        // SVC_ClassInfo. The matching Source path is CBaseClient::SendSignonData,
+        // where m_Server->m_Signon carries persistent init messages built during
+        // baseline creation rather than a per-player string-table update.
+        var gameEventDescriptors = Tf2SourceGameEventResourceCatalog.LoadOrDefault(
+            game.NativeSourceContentRootPath,
+            Tf2Ps3SourceCatalog.BootstrapGameEventDescriptors);
+        var frames = new List<Ps3SourceNetMessageFrame>
+        {
+            Ps3SourceNetMessages.BuildVoiceInitFrame(new Ps3SourceSvcVoiceInit(
+                Codec: "vaudio_speex",
+                LegacyQuality: 255)),
+            Ps3SourceNetMessages.BuildGameEventListFrame(gameEventDescriptors)
+        };
+        frames.AddRange(BuildNativeServerSignonMapInitFrames(game, player));
+        return Ps3SourceNetMessages.ConcatenateFrames(frames);
+    }
+
+    private static IReadOnlyList<Ps3SourceNetMessageFrame> BuildNativeServerSignonMapInitFrames(
+        GameManagerSession game,
+        PlayerSession player)
+    {
+        var anchor = NativeServerSignonWorldAnchor(game, player);
+        return
+        [
+            Ps3SourceNetMessages.BuildSoundsFrame(
+                reliableSound: true,
+                [
+                    Ps3SourceSoundInfo.Default with
+                    {
+                        SequenceNumber = checked((int)(StableSourceDigest32($"signon-sound-seq:{game.MapName}") % (1U << Ps3SourceNetMessageConstants.SoundSequenceNumberBits))),
+                        EntityIndex = 0,
+                        Channel = Ps3SourceNetMessageConstants.DefaultSoundChannel,
+                        Origin = anchor,
+                        Volume = 1.0f,
+                        SoundLevel = Ps3SourceNetMessageConstants.DefaultSoundLevel,
+                        Pitch = Ps3SourceNetMessageConstants.DefaultSoundPitch,
+                        SoundNumber = NativeServerSignonSoundIndex(game),
+                        IsAmbient = true
+                    }
+                ]),
+            Ps3SourceNetMessages.BuildBspDecalFrame(new Ps3SourceSvcBspDecal(
+                Position: anchor,
+                DecalTextureIndex: NativeServerSignonDecalTextureIndex(game),
+                EntityIndex: 0,
+                ModelIndex: 0,
+                LowPriority: false))
         ];
+    }
+
+    private static Ps3SourceVector NativeServerSignonWorldAnchor(GameManagerSession game, PlayerSession player)
+    {
+        var metadata = game.CurrentMapMetadata;
+        if (metadata is not null)
+        {
+            var controlPoint = metadata.ControlPoints.FirstOrDefault();
+            if (controlPoint is not null)
+            {
+                return new Ps3SourceVector(controlPoint.X, controlPoint.Y, controlPoint.Z);
+            }
+
+            var flag = metadata.Flags.FirstOrDefault();
+            if (flag is not null)
+            {
+                return new Ps3SourceVector(flag.X, flag.Y, flag.Z);
+            }
+
+            var spawn = metadata.SpawnPoints.FirstOrDefault(static point => point.Enabled)
+                ?? metadata.SpawnPoints.FirstOrDefault();
+            if (spawn is not null)
+            {
+                return new Ps3SourceVector(spawn.X, spawn.Y, spawn.Z);
+            }
+
+            if (metadata.Bounds is { } bounds)
+            {
+                return new Ps3SourceVector(
+                    (bounds.MinX + bounds.MaxX) * 0.5f,
+                    (bounds.MinY + bounds.MaxY) * 0.5f,
+                    (bounds.MinZ + bounds.MaxZ) * 0.5f);
+            }
+        }
+
+        return new Ps3SourceVector(
+            player.SourceState.OriginX,
+            player.SourceState.OriginY,
+            player.SourceState.OriginZ);
+    }
+
+    private static int NativeServerSignonSoundIndex(GameManagerSession game)
+    {
+        return 1;
+    }
+
+    private static int NativeServerSignonDecalTextureIndex(GameManagerSession game)
+    {
+        return 1;
     }
 
     public IReadOnlyList<byte[]> BuildDiagnosticCriticalSourceObjectStreamBootstrap(GameManagerSession game, PlayerSession player)
@@ -1809,7 +2042,7 @@ public sealed class Ps3NativeSourceResponder
             : checked((uint)player.SourceState.RootObjectId);
         return BuildDiagnosticCriticalSourceNetMessageBootstrapFrames(game, player)
             .Select((frame, index) => Ps3SourceObjectStream.Encode(new Ps3SourceObjectStreamRecord(
-                MessageKind: index == 4 ? (byte)2 : (byte)1,
+                MessageKind: SourceNetFrameObjectStreamKind(frame),
                 OwnerOrCallbackId: ownerOrCallbackId,
                 Sequence: checked((uint)(index + 1)),
                 Payload: frame.Payload,
@@ -1828,6 +2061,10 @@ public sealed class Ps3NativeSourceResponder
             throw new InvalidOperationException("Critical Source bootstrap frame builder returned an incomplete frame set.");
         }
 
+        var serverInfo = RequiredSourceNetFrame(frames, Ps3SourceNetMessageConstants.SvcServerInfo);
+        var sendTable = RequiredSourceNetFrame(frames, Ps3SourceNetMessageConstants.SvcSendTable);
+        var classInfo = RequiredSourceNetFrame(frames, Ps3SourceNetMessageConstants.SvcClassInfo);
+        var createStringTables = SourceNetFramesOfType(frames, Ps3SourceNetMessageConstants.SvcCreateStringTable);
         var spawnCount = 1;
         var viewEntityIndex = checked((int)(player.SourceState.LocalPlayerObjectId == 0
             ? player.SourceState.RootObjectId
@@ -1836,21 +2073,56 @@ public sealed class Ps3NativeSourceResponder
         var signonState4 = Ps3SourceNetMessages.BuildNetSignonStateFrame(new Ps3SourceNetSignonState(4, spawnCount));
         var setView = Ps3SourceNetMessages.BuildSetViewFrame(new Ps3SourceSvcSetView(viewEntityIndex));
         var signonState5 = Ps3SourceNetMessages.BuildNetSignonStateFrame(new Ps3SourceNetSignonState(5, spawnCount));
+        var signonState6 = Ps3SourceNetMessages.BuildNetSignonStateFrame(new Ps3SourceNetSignonState(6, spawnCount));
+        var classInfoFollowUp = BuildNativeClassInfoFollowUpRawAppendFrame(game, player);
         Ps3SourceNetMessageFrame[] batches =
         [
-            Ps3SourceNetMessages.ConcatenateFrames([frames[0], frames[1], frames[3], signonState3]),
-            Ps3SourceNetMessages.ConcatenateFrames([frames[2], signonState4]),
-            Ps3SourceNetMessages.ConcatenateFrames([setView, signonState5]),
-            frames[4]
+            Ps3SourceNetMessages.ConcatenateFrames([serverInfo, sendTable, .. createStringTables, signonState3]),
+            Ps3SourceNetMessages.ConcatenateFrames([classInfo, classInfoFollowUp, signonState4]),
+            Ps3SourceNetMessages.ConcatenateFrames([setView, signonState5, signonState6])
         ];
 
         return batches
             .Select((frame, index) => Ps3SourceObjectStream.Encode(new Ps3SourceObjectStreamRecord(
-                MessageKind: index == 3 ? (byte)2 : (byte)1,
+                MessageKind: 1,
                 OwnerOrCallbackId: ownerOrCallbackId,
                 Sequence: checked((uint)(index + 1)),
                 Payload: frame.Payload,
                 PayloadBitCount: frame.BitCount)))
+            .ToArray();
+    }
+
+    private static byte SourceNetFrameObjectStreamKind(Ps3SourceNetMessageFrame frame)
+    {
+        return Ps3SourceNetMessages.TryReadMessageType(frame.Payload, out var messageType)
+            && messageType == Ps3SourceNetMessageConstants.SvcUpdateStringTable
+                ? (byte)2
+                : (byte)1;
+    }
+
+    private static Ps3SourceNetMessageFrame RequiredSourceNetFrame(
+        IReadOnlyList<Ps3SourceNetMessageFrame> frames,
+        int messageType)
+    {
+        foreach (var frame in frames)
+        {
+            if (Ps3SourceNetMessages.TryReadMessageType(frame.Payload, out var candidate)
+                && candidate == messageType)
+            {
+                return frame;
+            }
+        }
+
+        throw new InvalidOperationException($"Critical Source bootstrap frame set is missing message type {messageType}.");
+    }
+
+    private static Ps3SourceNetMessageFrame[] SourceNetFramesOfType(
+        IReadOnlyList<Ps3SourceNetMessageFrame> frames,
+        int messageType)
+    {
+        return frames
+            .Where(frame => Ps3SourceNetMessages.TryReadMessageType(frame.Payload, out var candidate)
+                && candidate == messageType)
             .ToArray();
     }
 
@@ -1866,6 +2138,45 @@ public sealed class Ps3NativeSourceResponder
             game,
             player,
             "generated PS3 Source native quick-match terminal map-load object-stream bootstrap batch");
+        AddPostTerminalSteadyBootstrapResponse(responses, state, game, player);
+    }
+
+    private static void AddPostTerminalSteadyBootstrapResponse(
+        List<Ps3NativeSourceResponse> responses,
+        Ps3NativeSourceResponderState state,
+        GameManagerSession game,
+        PlayerSession player)
+    {
+        if (state.SentSteadySemanticBootstrapSnapshot)
+        {
+            return;
+        }
+
+        AddPacket(
+            responses,
+            state,
+            BuildUrgentStateSnapshotFrameBody(game, player, includeRagdoll: !player.SourceState.Alive),
+            "generated PS3 Source native post-terminal steady semantic bootstrap snapshot/entity-delta frame",
+            sequenceAdvance: 4,
+            allowFragmentation: true,
+            allowNativeWrap: true);
+        state.SentSteadySemanticBootstrapSnapshot = true;
+    }
+
+    private void AddCriticalSourceObjectStreamBootstrapResponses(
+        List<Ps3NativeSourceResponse> responses,
+        Ps3NativeSourceResponderState state,
+        GameManagerSession game,
+        PlayerSession player,
+        string explanationPrefix)
+    {
+        AddObjectStreamBootstrapResponses(
+            responses,
+            state,
+            game,
+            player,
+            explanationPrefix,
+            sequenceAdvance: 1);
     }
 
     private void AddObjectStreamBootstrapResponses(
@@ -1873,7 +2184,8 @@ public sealed class Ps3NativeSourceResponder
         Ps3NativeSourceResponderState state,
         GameManagerSession game,
         PlayerSession player,
-        string explanationPrefix)
+        string explanationPrefix,
+        int? sequenceAdvance = null)
     {
         var batches = BuildDiagnosticCriticalSourceObjectStreamBootstrapBatches(game, player);
         for (var i = 0; i < batches.Count; i++)
@@ -1882,7 +2194,9 @@ public sealed class Ps3NativeSourceResponder
                 responses,
                 state,
                 batches[i],
-                $"{explanationPrefix} {i + 1}");
+                $"{explanationPrefix} {i + 1}",
+                sequenceAdvance: sequenceAdvance,
+                allowFragmentation: true);
         }
     }
 
@@ -1908,11 +2222,23 @@ public sealed class Ps3NativeSourceResponder
     {
         var shape = LoadingStateLinkHeartbeatShapes[state.LoadingStateLinkHeartbeatIndex % LoadingStateLinkHeartbeatShapes.Length];
         state.LoadingStateLinkHeartbeatIndex++;
+        var detail = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            shape.Length,
+            LoadingContinuationSeed(90, state.LoadingStateLinkHeartbeatIndex, shape.Length),
+            90 + state.LoadingStateLinkHeartbeatIndex,
+            $"loading-heartbeat-{state.LoadingStateLinkHeartbeatIndex}",
+            out var body,
+            out var builtNativeSnapshot);
         AddPacket(
             responses,
             state,
-            BuildPlayerStateLinkBody(game, player, shape.Length, shape.PrefixLength, shape.MaxRecords),
-            "generated PS3 Source native loading PNG state-link heartbeat",
+            body,
+            builtNativeSnapshot
+                ? "generated PS3 Source native loading state-link heartbeat snapshot/entity-delta"
+                : $"generated PS3 Source native loading state-link heartbeat {detail}",
             sequenceAdvance: 3);
     }
 
@@ -1950,8 +2276,21 @@ public sealed class Ps3NativeSourceResponder
 
         if (suppressAfter > 0)
         {
-            state.SuppressLoadingContinuationResponses = suppressAfter;
+            state.SuppressLoadingContinuationResponses = ShouldSilenceNextLoadingContinuationResponse(stageIndex, frames)
+                ? -suppressAfter
+                : suppressAfter;
         }
+    }
+
+    private static bool ConsumeSilentLoadingContinuationResponse(Ps3NativeSourceResponderState state)
+    {
+        if (state.SuppressLoadingContinuationResponses >= 0)
+        {
+            return false;
+        }
+
+        state.SuppressLoadingContinuationResponses++;
+        return true;
     }
 
     private static void AddLoadingFrames(
@@ -1968,49 +2307,336 @@ public sealed class Ps3NativeSourceResponder
         {
             var frame = frames[frameIndex];
             var seed = LoadingContinuationSeed(seedStageIndex, frameIndex, frame.Length);
-            var body = frame.Kind switch
-            {
-                LoadingContinuationFrameKind.PlayerStateLink when seedStageIndex >= 200
-                    && TryBuildSteadyNativeSnapshotBody(game, player, frame.Length, seed, seedStageIndex, out var nativeSnapshot) =>
-                    nativeSnapshot,
-                LoadingContinuationFrameKind.PlayerStateLink when ShouldBuildPlayerStateLinkAsHighEntropy(initialSetupVariant, frame.Length, seedStageIndex) =>
-                    BuildHighEntropyBinaryBody(game, player, frame.Length, seed),
-                LoadingContinuationFrameKind.PlayerStateLink => BuildPlayerStateLinkBody(
+            var builtNativeSnapshot = false;
+            byte[] body = [];
+            var forceMarkerlessNativeChunk = frame.Kind == LoadingContinuationFrameKind.NativeSnapshot
+                || (initialSetupVariant == 1
+                    && seedStageIndex == 0
+                    && frame.Length >= 1000);
+            var detail = forceMarkerlessNativeChunk
+                ? "queued-peer high-entropy loading chunk"
+                : frame.Kind == LoadingContinuationFrameKind.PlayerStateLink
+                ? "queued PNG state-link loading frame"
+                : TryBuildNativeLoadingContinuationBody(
                     game,
                     player,
+                    state,
+                    frame,
+                    seed,
+                    seedStageIndex,
+                    frameIndex,
+                    out body,
+                    out builtNativeSnapshot,
+                    out var nativeDetail)
+                    ? nativeDetail
+                    : "queued-boundary placeholder";
+
+            if (forceMarkerlessNativeChunk)
+            {
+                body = BuildQueuedBoundaryOnlyBody(
+                    game,
+                    player,
+                    state,
+                    frame.Length,
+                    (byte)seed,
+                    $"loading-initial-queued-chunk-{seedStageIndex}-{frameIndex}-{frame.Length}");
+            }
+            else if (frame.Kind == LoadingContinuationFrameKind.PlayerStateLink)
+            {
+                body = BuildNativeQueuedLoadingPlayerStateLinkBody(
+                    game,
+                    player,
+                    state,
                     frame.Length,
                     frame.PrefixLength,
-                    frame.MaxRecords),
-                LoadingContinuationFrameKind.MixedBinary when seedStageIndex >= 200
-                    && TryBuildSteadyNativeSnapshotBody(game, player, frame.Length, seed, seedStageIndex, out var nativeSnapshot) =>
-                    nativeSnapshot,
-                LoadingContinuationFrameKind.MixedBinary => BuildMixedBinaryBody(
+                    frame.MaxRecords,
+                    $"loading-state-link-{seedStageIndex}-{frameIndex}-{frame.Length}");
+            }
+            else if (detail == "queued-boundary placeholder")
+            {
+                body = BuildQueuedBoundaryOnlyBody(
                     game,
                     player,
+                    state,
                     frame.Length,
-                    (byte)seed),
-                LoadingContinuationFrameKind.HighEntropy when seedStageIndex >= 200
-                    && TryBuildSteadyNativeSnapshotBody(game, player, frame.Length, seed, seedStageIndex, out var nativeSnapshot) =>
-                    nativeSnapshot,
-                _ => BuildHighEntropyBinaryBody(game, player, frame.Length, seed)
-            };
+                    (byte)seed,
+                    $"loading-{frame.Kind}-{seedStageIndex}-{frameIndex}-{frame.Length}");
+            }
 
             AddPacket(
                 responses,
                 state,
                 body,
-                frame.Kind switch
-                {
-                    LoadingContinuationFrameKind.PlayerStateLink => $"{explanation} PNG state-link",
-                    LoadingContinuationFrameKind.MixedBinary => $"{explanation} mixed",
-                    _ => $"{explanation} binary"
-                },
+                builtNativeSnapshot
+                    ? $"{explanation} snapshot/entity-delta"
+                    : $"{explanation} {detail}",
                 sequenceAdvance: LoadingContinuationSequenceAdvance(frame.Length));
         }
     }
 
-    private static bool ShouldBuildPlayerStateLinkAsHighEntropy(int initialSetupVariant, int length, int seedStageIndex)
+    private static bool TryBuildNativeLoadingContinuationBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        LoadingContinuationFrame frame,
+        uint seed,
+        int seedStageIndex,
+        int frameIndex,
+        out byte[] body,
+        out bool builtNativeSnapshot,
+        out string detail)
     {
+        builtNativeSnapshot = false;
+        detail = "";
+
+        if (frame.Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
+            && TryBuildCompactLoadingControlBody(game, player, state, frame.Length, (byte)seed, out body, out detail))
+        {
+            return true;
+        }
+
+        if (frame.Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
+            && TryBuildEmbeddedLoadingBoundaryBody(game, player, state, frame.Length, (byte)seed, seedStageIndex, frameIndex, out body, out detail))
+        {
+            return true;
+        }
+
+        if (TryBuildNativeSnapshotBody(game, player, frame.Length, seed, seedStageIndex, out body))
+        {
+            builtNativeSnapshot = true;
+            detail = "snapshot/entity-delta";
+            return true;
+        }
+
+        if (TryBuildEmbeddedLoadingBoundaryBody(game, player, state, frame.Length, (byte)seed, seedStageIndex, frameIndex, out body, out detail))
+        {
+            return true;
+        }
+
+        body = [];
+        return false;
+    }
+
+    private static string BuildPlayerStateLinkSlotReplacementBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int targetLength,
+        uint seed,
+        int stageIndex,
+        string family,
+        out byte[] body,
+        out bool builtNativeSnapshot)
+    {
+        builtNativeSnapshot = false;
+        if (targetLength >= 48 && TryBuildNativeSnapshotBody(game, player, targetLength, seed, stageIndex, out body))
+        {
+            builtNativeSnapshot = true;
+            return "snapshot/entity-delta";
+        }
+
+        var recordCount = Math.Max(1, Math.Min(10, targetLength / Ps3SourcePlayerStateLinkRecord.Length));
+        body = BuildPurePlayerStateLinkBody(player, recordCount);
+        return $"PNG state-link records without generated prefix for {family}";
+    }
+
+    private static byte[] BuildPlayerStateLinkSlotReplacementPayload(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int targetLength,
+        uint seed,
+        int stageIndex,
+        string family)
+    {
+        _ = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            targetLength,
+            seed,
+            stageIndex,
+            family,
+            out var body,
+            out _);
+        return body;
+    }
+
+    private static byte[] BuildPurePlayerStateLinkBody(PlayerSession player, int recordCount)
+    {
+        var objectIds = RepeatingFrozenStateObjectIds(player, Math.Max(1, recordCount))
+            .Select(objectId => new Ps3SourcePlayerStateLinkRecord(objectId, RootSourceObjectId(player)))
+            .ToArray();
+        return Ps3SourcePlayerStateLinkRecord.BuildBatch(objectIds);
+    }
+
+    private static bool TryBuildCompactLoadingControlBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        byte streamKind,
+        out byte[] body,
+        out string detail)
+    {
+        var gameId = unchecked((uint)game.GameId);
+        var playerId = unchecked((uint)player.PlayerId);
+        var clientSequence = player.SourceState.LastClientSourceSequence;
+        body = length switch
+        {
+            Ps3SourceCompactControlFrame.AckToken10BodyBytes => Ps3SourceCompactControlFrame.EncodeAckToken10(
+                gameId,
+                playerId,
+                clientSequence,
+                state.ClientPacketCount,
+                state.NextServerSequence,
+                streamKind),
+            Ps3SourceCompactControlFrame.Control17BodyBytes => Ps3SourceCompactControlFrame.EncodeControl17(
+                gameId,
+                playerId,
+                clientSequence,
+                state.ClientPacketCount,
+                state.NextServerSequence,
+                streamKind),
+            Ps3SourceCompactControlFrame.AckWindow21BodyBytes => Ps3SourceCompactControlFrame.EncodeAckWindow21(
+                gameId,
+                playerId,
+                clientSequence,
+                state.ClientPacketCount,
+                state.NextServerSequence,
+                streamKind),
+            Ps3SourceCompactControlFrame.AckWindow28BodyBytes => Ps3SourceCompactControlFrame.EncodeAckWindow28(
+                gameId,
+                playerId,
+                clientSequence,
+                state.ClientPacketCount,
+                state.NextServerSequence,
+                streamKind),
+            Ps3SourceCompactControlFrame.ServerControl31BodyBytes => Ps3SourceCompactControlFrame.EncodeServerControl31(
+                gameId,
+                playerId,
+                clientSequence,
+                state.ClientPacketCount,
+                state.NextServerSequence,
+                streamKind),
+            _ => []
+        };
+
+        if (body.Length == 0)
+        {
+            detail = "";
+            return false;
+        }
+
+        detail = length switch
+        {
+            Ps3SourceCompactControlFrame.AckToken10BodyBytes => "compact ack-token",
+            Ps3SourceCompactControlFrame.Control17BodyBytes => "compact control",
+            Ps3SourceCompactControlFrame.AckWindow21BodyBytes => "compact ack-window",
+            Ps3SourceCompactControlFrame.AckWindow28BodyBytes => "compact ack-window28",
+            Ps3SourceCompactControlFrame.ServerControl31BodyBytes => "compact server-control31",
+            _ => "compact control"
+        };
+        return true;
+    }
+
+    private static bool TryBuildEmbeddedLoadingBoundaryBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        byte streamKind,
+        int seedStageIndex,
+        int frameIndex,
+        out byte[] body,
+        out string detail)
+    {
+        var family = $"loading-boundary-{seedStageIndex}-{frameIndex}-{length}";
+        if (TryGetLoadingStateLinkShape(length, out var stateLinkPrefix, out var stateLinkRecords))
+        {
+            body = BuildEmbeddedPlayerStateLinkBoundaryBody(
+                game,
+                player,
+                state,
+                length,
+                stateLinkPrefix,
+                stateLinkRecords,
+                streamKind,
+                family + ":png");
+            detail = "PNG state-link boundary";
+            return true;
+        }
+
+        if (TryGetLoadingFrozenStateShape(length, out var frozenPrefix, out var frozenRecords))
+        {
+            body = BuildEmbeddedFrozenStateBoundaryBody(
+                game,
+                player,
+                state,
+                length,
+                frozenPrefix,
+                frozenRecords,
+                streamKind,
+                family + ":coc");
+            detail = "COc FrozenState boundary";
+            return true;
+        }
+
+        body = [];
+        detail = "";
+        return false;
+    }
+
+    private static bool TryGetLoadingStateLinkShape(int length, out int prefixLength, out int recordCount)
+    {
+        (prefixLength, recordCount) = length switch
+        {
+            24 => (0, 2),
+            28 => (4, 2),
+            35 => (11, 2),
+            38 => (14, 2),
+            42 => (6, 3),
+            48 => (0, 4),
+            49 => (25, 2),
+            52 => (16, 3),
+            56 => (8, 4),
+            63 => (15, 4),
+            66 => (18, 4),
+            70 => (10, 5),
+            77 => (13, 5),
+            84 => (12, 6),
+            91 => (13, 6),
+            94 => (10, 7),
+            98 => (14, 7),
+            196 => (4, 16),
+            206 => (14, 16),
+            220 => (16, 17),
+            _ => (-1, 0)
+        };
+
+        return prefixLength >= 0;
+    }
+
+    private static bool TryGetLoadingFrozenStateShape(int length, out int prefixLength, out int recordCount)
+    {
+        (prefixLength, recordCount) = length switch
+        {
+            53 => (16, 1),
+            60 => (23, 1),
+            74 => (0, 2),
+            _ => (-1, 0)
+        };
+
+        return prefixLength >= 0;
+    }
+
+    private static bool ShouldBuildPlayerStateLinkAsNativeSnapshot(int initialSetupVariant, int length, int seedStageIndex)
+    {
+        if (length >= 48)
+        {
+            return true;
+        }
+
         return initialSetupVariant switch
         {
             2 => length == 210 || length is >= 256 and < 998,
@@ -2104,19 +2730,28 @@ public sealed class Ps3NativeSourceResponder
         PlayerSession player,
         ushort clientSequence)
     {
-        var commandCadence = state.ClientPacketCount >= MinimumCommandSnapshotClientPacketCount
+        var continuationExhausted = state.InitialSetupVariant == 1
+            && state.LoadingContinuationStage > LoadingContinuationStages.Length + 2;
+        var commandCadence = state.ClientPacketCount >= 320
             && player.SourceState.LastClientSourceBodyLength >= 69
             && player.SourceState.LastClientSourceSequenceDelta is >= 16 and <= 20;
         var decodedCommandCadence = player.SourceState.LastClientCommandDecoded
-            && state.ClientPacketCount >= MinimumCommandSnapshotClientPacketCount;
-        var lateClientPacketCount = state.ClientPacketCount >= 64;
-        var lateClientSequence = clientSequence >= SparseQuickMatchLateLoadingSequence
-            || player.SourceState.LastClientSourceSequence >= SparseQuickMatchLateLoadingSequence;
+            && state.ClientPacketCount >= 320;
+        var lateClientPacketCount = state.ClientPacketCount >= 320;
+        var sparseQuickMatchRosterHandoff = state.InitialSetupVariant == 1
+            && !state.SawInitialClientFrozenStateUpload
+            && state.ClientPacketCount >= 60
+            && (clientSequence >= SparseQuickMatchRosterHandoffSequence
+                || player.SourceState.LastClientSourceSequence >= SparseQuickMatchRosterHandoffSequence
+                || state.LoadingContinuationStage >= 132);
+        var lateClientSequence = clientSequence >= 4000
+            || player.SourceState.LastClientSourceSequence >= 4000;
 
         return state.SentLoadingPostBurstContinuation
             && !state.SentRosterDescriptorState
-            && (lateClientSequence
-                || state.LoadingContinuationStage >= 120
+            && (continuationExhausted
+                || sparseQuickMatchRosterHandoff
+                || lateClientSequence
                 || lateClientPacketCount
                 || commandCadence
                 || decodedCommandCadence);
@@ -2162,7 +2797,7 @@ public sealed class Ps3NativeSourceResponder
             2 => Variant2LoadingBurstFrames,
             3 => Variant3LoadingBurstFrames,
             4 => Variant4LoadingBurstFrames,
-            _ => [new(LoadingContinuationFrameKind.PlayerStateLink, 1112, 28, 9), new(LoadingContinuationFrameKind.HighEntropy, 1212)]
+            _ => [new(LoadingContinuationFrameKind.PlayerStateLink, 1112, 28, 9), new(LoadingContinuationFrameKind.NativeSnapshot, 1212)]
         };
     }
 
@@ -2173,7 +2808,7 @@ public sealed class Ps3NativeSourceResponder
             2 => Variant2LoadingPostBurstFrames,
             3 => Variant3LoadingPostBurstFrames,
             4 => Variant4LoadingPostBurstFrames,
-            _ => [new(LoadingContinuationFrameKind.HighEntropy, 206)]
+            _ => [new(LoadingContinuationFrameKind.NativeSnapshot, 206)]
         };
     }
 
@@ -2223,17 +2858,25 @@ public sealed class Ps3NativeSourceResponder
         return kindCode switch
         {
             'L' => PlayerStateLinkFrame(length),
-            'M' => new LoadingContinuationFrame(LoadingContinuationFrameKind.MixedBinary, length),
-            _ => new LoadingContinuationFrame(LoadingContinuationFrameKind.HighEntropy, length)
+            'M' => new LoadingContinuationFrame(LoadingContinuationFrameKind.NativeQueuedBoundary, length),
+            _ => new LoadingContinuationFrame(LoadingContinuationFrameKind.NativeSnapshot, length)
         };
     }
 
     private static LoadingContinuationFrame PlayerStateLinkFrame(int length)
     {
+        if (length >= 512)
+        {
+            var recordCount = LargePlayerStateLinkRecordCount(length);
+            return new LoadingContinuationFrame(
+                LoadingContinuationFrameKind.PlayerStateLink,
+                length,
+                Math.Max(0, length - (recordCount * Ps3SourcePlayerStateLinkRecord.Length)),
+                recordCount);
+        }
+
         var (prefixLength, maxRecords) = length switch
         {
-            >= 1000 => (28, 9),
-            >= 600 => (24, 9),
             >= 250 => (18, 9),
             >= 160 => (14, 8),
             >= 120 => (14, 7),
@@ -2248,14 +2891,60 @@ public sealed class Ps3NativeSourceResponder
         return new LoadingContinuationFrame(LoadingContinuationFrameKind.PlayerStateLink, length, prefixLength, maxRecords);
     }
 
+    private static int LargePlayerStateLinkRecordCount(int length)
+    {
+        ReadOnlySpan<(int BodyLength, int RecordCount)> retailBodies =
+        [
+            (1212, 2),
+            (1198, 3),
+            (1180, 3),
+            (1156, 2),
+            (1152, 1),
+            (1149, 1),
+            (1142, 1),
+            (1112, 1),
+            (982, 1),
+            (944, 3),
+            (944, 1),
+            (874, 2),
+            (860, 1),
+            (686, 4),
+            (685, 1),
+            (634, 3),
+            (620, 2),
+            (620, 4),
+            (606, 3),
+            (602, 2),
+            (592, 2),
+            (588, 1),
+            (578, 1)
+        ];
+
+        var bestRecordCount = 1;
+        var bestDelta = int.MaxValue;
+        foreach (var (bodyLength, recordCount) in retailBodies)
+        {
+            var delta = Math.Abs(length - bodyLength);
+            if (delta >= bestDelta)
+            {
+                continue;
+            }
+
+            bestDelta = delta;
+            bestRecordCount = recordCount;
+        }
+
+        return bestRecordCount;
+    }
+
     private static bool ShouldSuppressNextLoadingContinuationResponse(int stageIndex, IReadOnlyList<LoadingContinuationFrame> frames)
     {
         if (stageIndex >= 48)
         {
             if (frames.Count == 3
-                && frames[0].Kind == LoadingContinuationFrameKind.MixedBinary
+                && frames[0].Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
                 && frames[1].Kind == LoadingContinuationFrameKind.PlayerStateLink
-                && frames[2].Kind == LoadingContinuationFrameKind.MixedBinary
+                && frames[2].Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
                 && (frames[0].Length, frames[1].Length, frames[2].Length) is (28, 77, 21))
             {
                 return true;
@@ -2263,7 +2952,7 @@ public sealed class Ps3NativeSourceResponder
 
             if (frames.Count == 2
                 && ((frames[0].Kind, frames[0].Length, frames[1].Kind, frames[1].Length) is
-                    (LoadingContinuationFrameKind.PlayerStateLink, 70, LoadingContinuationFrameKind.MixedBinary, 10) or
+                    (LoadingContinuationFrameKind.PlayerStateLink, 70, LoadingContinuationFrameKind.NativeQueuedBoundary, 10) or
                     (LoadingContinuationFrameKind.PlayerStateLink, 77, LoadingContinuationFrameKind.PlayerStateLink, 35)))
             {
                 return true;
@@ -2271,8 +2960,8 @@ public sealed class Ps3NativeSourceResponder
         }
 
         if (frames.Count == 3
-            && frames[0].Kind == LoadingContinuationFrameKind.MixedBinary
-            && frames[1].Kind == LoadingContinuationFrameKind.MixedBinary
+            && frames[0].Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
+            && frames[1].Kind == LoadingContinuationFrameKind.NativeQueuedBoundary
             && frames[2].Kind == LoadingContinuationFrameKind.PlayerStateLink)
         {
             return (frames[0].Length, frames[1].Length, frames[2].Length) is (10, 21, 63);
@@ -2286,6 +2975,31 @@ public sealed class Ps3NativeSourceResponder
         }
 
         return (frames[0].Length, frames[1].Length) is (63, 63) or (49, 49);
+    }
+
+    private static bool ShouldSilenceNextLoadingContinuationResponse(int stageIndex, IReadOnlyList<LoadingContinuationFrame> frames)
+    {
+        if (ShouldSuppressNextLoadingContinuationResponse(stageIndex, frames))
+        {
+            return true;
+        }
+
+        if (frames.Any(static frame => frame.SuppressAfter > 0))
+        {
+            return true;
+        }
+
+        if (frames.Count == 2
+            && frames[0].Kind == LoadingContinuationFrameKind.PlayerStateLink
+            && frames[1].Kind == LoadingContinuationFrameKind.PlayerStateLink
+            && (frames[0].Length, frames[1].Length) is (63, 63) or (49, 49))
+        {
+            return true;
+        }
+
+        return frames.Count > 0
+            && frames.All(static frame => frame.Kind == LoadingContinuationFrameKind.PlayerStateLink)
+            && frames.Any(static frame => frame.SuppressAfter > 0);
     }
 
     private static int LoadingContinuationSuppressAfter(int initialSetupVariant, int stageIndex)
@@ -2352,12 +3066,24 @@ public sealed class Ps3NativeSourceResponder
     {
         var shape = SteadyStateLinkHeartbeatShapes[state.SteadyStateLinkHeartbeatIndex % SteadyStateLinkHeartbeatShapes.Length];
         state.SteadyStateLinkHeartbeatIndex++;
+        var detail = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            shape.Length,
+            LoadingContinuationSeed(300, state.SteadyStateLinkHeartbeatIndex, shape.Length),
+            300 + state.SteadyStateLinkHeartbeatIndex,
+            $"steady-heartbeat-{state.SteadyStateLinkHeartbeatIndex}",
+            out var body,
+            out var builtNativeSnapshot);
         AddPacket(
             responses,
             state,
-            BuildPlayerStateLinkBody(game, player, shape.Length, shape.PrefixLength, shape.MaxRecords),
-            "generated PS3 Source native steady PNG state-link heartbeat",
-                sequenceAdvance: 3);
+            body,
+            builtNativeSnapshot
+                ? "generated PS3 Source native steady state-link heartbeat snapshot/entity-delta"
+                : $"generated PS3 Source native steady state-link heartbeat {detail}",
+            sequenceAdvance: 3);
     }
 
     private static void AddSteadyStateDeltaTurn(
@@ -2479,7 +3205,77 @@ public sealed class Ps3NativeSourceResponder
         }
     }
 
-    private static bool TryBuildSteadyNativeSnapshotBody(
+    private static byte[] BuildQuickMatchTerminalPrompt1Body(GameManagerSession game, PlayerSession player)
+    {
+        return BuildQuickMatchTerminalPromptBody(game, player, QuickMatchTerminalPrompt1TargetLength, 1);
+    }
+
+    private static byte[] BuildQuickMatchTerminalPrompt2Body(GameManagerSession game, PlayerSession player)
+    {
+        return BuildQuickMatchTerminalPromptBody(game, player, QuickMatchTerminalPrompt2TargetLength, 2);
+    }
+
+    private static byte[] BuildQuickMatchTerminalPromptBody(
+        GameManagerSession game,
+        PlayerSession player,
+        int targetLength,
+        int promptIndex)
+    {
+        var stageIndex = promptIndex == 1 ? 180 : 181;
+        var seed = (uint)(0x90 + promptIndex);
+        if (TryBuildNativeSnapshotBody(game, player, targetLength, seed, stageIndex, out var body)
+            && body.Length > 0)
+        {
+            return body;
+        }
+
+        foreach (var candidate in BuildQuickMatchTerminalPromptFallbackCandidates(game, player))
+        {
+            var packedCandidate = Ps3SourceEntityDeltaFrameBuilder.PackEncodedNativeRecords([candidate]);
+            if (packedCandidate.Length <= targetLength
+                && Ps3SourceEntityDeltaFrameBuilder.TryDecodeNativeRecords(packedCandidate, out var records, out var consumedBits)
+                && records.Length > 0
+                && consumedBits > 0)
+            {
+                return packedCandidate;
+            }
+        }
+
+        return BuildPostRosterClientObjectBatchAckBody(game, player);
+    }
+
+    private static byte[][] BuildQuickMatchTerminalPromptFallbackCandidates(GameManagerSession game, PlayerSession player)
+    {
+        return
+        [
+            BuildTinyPromptEntityDeltaRecord(game, player),
+            BuildSnapshotMicroRoundTimerDelta(game),
+            BuildSnapshotMicroPlayerResourceDelta(game, player),
+            BuildSnapshotMicroPlayerEntityDelta(game, player),
+            BuildSnapshotMicroObjectiveResourceDelta(game),
+            BuildSnapshotNanoGameplayRulesDelta(game, player)
+        ];
+    }
+
+    private static byte[] BuildTinyPromptEntityDeltaRecord(GameManagerSession game, PlayerSession player)
+    {
+        var sourceState = player.SourceState;
+        var payload = Encoding.ASCII.GetBytes(
+            $"DT_TeamRoundTimer\0m_flTimeRemaining\0{game.MapName}\0{sourceState.TeamNumber}\0");
+        return Ps3SourceEntityDeltaFrameBuilder.EncodeNativeRecord(new Ps3SourceEntityDeltaNativeRecordOptions(
+            GroupIndex: 5,
+            IsPartialRun: true,
+            StartIndex: 0,
+            EntityCount: 1,
+            ObjectId: 0xa2,
+            ObjectName: "CTeamRoundTimer",
+            QueuedHandle: 0xa2,
+            BitLength: payload.Length * 8,
+            RawPayload: payload,
+            UseNativePartialWindow: true));
+    }
+
+    private static bool TryBuildNativeSnapshotBody(
         GameManagerSession game,
         PlayerSession player,
         int targetLength,
@@ -2520,9 +3316,9 @@ public sealed class Ps3NativeSourceResponder
             if (wrapped.Length > targetLength)
             {
                 var greedy = Ps3SourceLzss.EncodeGreedy(framePayload);
-                if (greedy.Length <= targetLength)
+                if (greedy.Length <= targetLength && IsDecodableNativeSnapshotOrEntityDeltaBody(greedy))
                 {
-                    body = PadNativeWrappedPayload(greedy, targetLength, seed ^ checked((uint)frameIndex));
+                    body = greedy;
                     state.SnapshotBaseFrame = state.SnapshotFrameIndex;
                     state.SnapshotFrameIndex++;
                     return true;
@@ -2536,19 +3332,45 @@ public sealed class Ps3NativeSourceResponder
                     continue;
                 }
 
-                body = PadNativeWrappedPayload(directPayload, targetLength, seed ^ checked((uint)frameIndex));
+                if (!Ps3SourceEntityDeltaFrameBuilder.TryDecodeNativeRecords(directPayload, out var directRecords, out var directConsumedBits)
+                    || directRecords.Length == 0
+                    || directConsumedBits <= 0)
+                {
+                    continue;
+                }
+
+                body = directPayload;
                 state.SnapshotBaseFrame = state.SnapshotFrameIndex;
                 state.SnapshotFrameIndex++;
                 return true;
             }
 
-            body = PadNativeWrappedPayload(wrapped, targetLength, seed ^ checked((uint)frameIndex));
-            state.SnapshotBaseFrame = state.SnapshotFrameIndex;
-            state.SnapshotFrameIndex++;
-            return true;
+            if (IsDecodableNativeSnapshotOrEntityDeltaBody(wrapped))
+            {
+                body = wrapped;
+                state.SnapshotBaseFrame = state.SnapshotFrameIndex;
+                state.SnapshotFrameIndex++;
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private static bool IsDecodableNativeSnapshotOrEntityDeltaBody(byte[] body)
+    {
+        var semanticPayload = Ps3SourceLzss.TryDecode(body, out var decoded)
+            ? decoded
+            : body;
+        return Ps3SourceSnapshotFrameBuilder.TryDecode(semanticPayload, out var frame)
+                && frame.Header.HasEntityDelta
+                && frame.EntityDeltaSection is { Records.Length: > 0 }
+            || Ps3SourceEntityDeltaFrameBuilder.TryDecodeNativeRecords(
+                semanticPayload,
+                out var records,
+                out var consumedBits)
+                && records.Length > 0
+                && consumedBits > 0;
     }
 
     private static void AddNextObjectStateIntroTurn(
@@ -2557,7 +3379,7 @@ public sealed class Ps3NativeSourceResponder
         GameManagerSession game,
         PlayerSession player)
     {
-        var batches = BuildObjectStateIntroBatches(game, player, state.InitialSetupVariant);
+        var batches = BuildObjectStateIntroBatches(game, player, state);
         if (state.ObjectStateIntroBatchIndex >= batches.Length)
         {
             return;
@@ -2574,11 +3396,6 @@ public sealed class Ps3NativeSourceResponder
             var batch = batches[state.ObjectStateIntroBatchIndex];
             AddPacket(responses, state, batch.Body, batch.Explanation, batch.SequenceAdvance);
             suppressAfter = Math.Max(suppressAfter, batch.SuppressAfter);
-        }
-
-        if (startingBatchIndex == 0 && state.InitialSetupVariant == 1)
-        {
-            suppressAfter = Math.Max(suppressAfter, 1);
         }
 
         if (suppressAfter > 0)
@@ -2621,7 +3438,19 @@ public sealed class Ps3NativeSourceResponder
         PlayerSession player)
     {
         return state.SentObjectState
-            && state.ObjectStateIntroBatchIndex >= BuildObjectStateIntroBatches(game, player, state.InitialSetupVariant).Length;
+            && state.ObjectStateIntroBatchIndex >= ObjectStateIntroBatchLength(state.InitialSetupVariant);
+    }
+
+    private static int ObjectStateIntroBatchLength(int initialSetupVariant)
+    {
+        return initialSetupVariant switch
+        {
+            2 => 10,
+            3 => 13,
+            4 => 9,
+            5 => 9,
+            _ => 10
+        };
     }
 
     private static bool ShouldSendCommandSnapshot(Ps3NativeSourceResponderState state, PlayerSession player)
@@ -2727,6 +3556,8 @@ public sealed class Ps3NativeSourceResponder
             && !state.SentQuickMatchTerminalMapLoad
             && !state.SentLateLargeCommandContinuation
             && state.PostRosterContinuationStage == 0
+            && state.QuickMatchTerminalPrompt1WaitClientPacketCount == 0
+            && !IsQuickMatchDirectMapLoadUpload(clientPayloadLength)
             && IsQuickMatchTerminalPrompt1Upload(clientPayloadLength);
     }
 
@@ -2737,8 +3568,31 @@ public sealed class Ps3NativeSourceResponder
         return !state.SentQuickMatchTerminalMapLoad
             && !state.SentLateLargeCommandContinuation
             && state.PostRosterContinuationStage == 0
-            && clientPayloadLength == 56
-            && state.QuickMatchTerminalPromptStage is 1 or 2;
+            && ((clientPayloadLength == 56 && state.QuickMatchTerminalPromptStage is 1 or 2)
+                || (state.QuickMatchTerminalPromptStage == 1
+                    && IsQuickMatchTerminalPrompt1Upload(clientPayloadLength)
+                    && (state.QuickMatchTerminalPrompt1WaitClientPacketCount > 0
+                        || IsQuickMatchDirectMapLoadUpload(clientPayloadLength))));
+    }
+
+    private static bool ShouldSendSparseQuickMatchTerminalMapLoadAfterShortAck(
+        Ps3NativeSourceResponderState state,
+        PlayerSession player,
+        Ps3SourceTransportPacket clientPacket)
+    {
+        return !state.SentQuickMatchTerminalMapLoad
+            && !state.SentLateLargeCommandContinuation
+            && state.InitialSetupVariant == 1
+            && !state.SawInitialClientFrozenStateUpload
+            && state.SentLoadingPostBurstContinuation
+            && state.SentLoadingMotdEvent
+            && state.SentRosterDescriptorState
+            && state.PostRosterContinuationStage == 0
+            && state.QuickMatchTerminalPromptStage == 0
+            && state.LoadingContinuationStage >= 120
+            && state.ClientPacketCount >= 69
+            && player.SourceState.LastClientSourceSequence >= SparseQuickMatchRosterHandoffSequence
+            && IsShortClientControl(clientPacket);
     }
 
     private static bool ShouldWaitForQuickMatchTerminalUpload(
@@ -2801,6 +3655,11 @@ public sealed class Ps3NativeSourceResponder
     private static bool IsQuickMatchTerminalPrompt1Upload(int clientPayloadLength)
     {
         return clientPayloadLength is >= 160 and <= 260;
+    }
+
+    private static bool IsQuickMatchDirectMapLoadUpload(int clientPayloadLength)
+    {
+        return clientPayloadLength is >= 220 and <= 260;
     }
 
     private static bool ShouldTreatLateDirectUploadAsQuickMatchTerminalPrompt2(
@@ -2866,19 +3725,56 @@ public sealed class Ps3NativeSourceResponder
     private static bool ShouldSendObjectState(
         Ps3NativeSourceResponderState state,
         PlayerSession player,
-        ReadOnlySpan<byte> clientBody)
+        bool clientHasEmbeddedObjectState)
     {
         if (!state.SentServerInfo)
         {
             return false;
         }
 
-        return HasEmbeddedObjectState(clientBody)
+        if (state.InitialSetupVariant == 1 && !state.SentObjectState)
+        {
+            return state.PendingInitialClientFrozenStateUpload
+                    && player.SourceState.LastClientSourceRole == Ps3SourceClientPayloadRole.ShortControlAck
+                || player.SourceState.LastClientSourceRole == Ps3SourceClientPayloadRole.ReliableAssociationProbe
+                || ShouldStartQuickMatchObjectStateFromLiveCommandCadence(state, player);
+        }
+
+        return clientHasEmbeddedObjectState
             || player.SourceState.LastClientSourceRole is Ps3SourceClientPayloadRole.ReliableAssociationProbe
                 or Ps3SourceClientPayloadRole.AttachedPlayerPayloadFrame
                 or Ps3SourceClientPayloadRole.UserCommandCandidate
                 or Ps3SourceClientPayloadRole.BinaryControlPayload
             || state.ClientPacketCount >= 3;
+    }
+
+    private static bool ShouldStartQuickMatchObjectStateFromLiveCommandCadence(
+        Ps3NativeSourceResponderState state,
+        PlayerSession player)
+    {
+        if (!state.SentQuickMatchSetupContinuation
+            || state.PendingInitialClientFrozenStateUpload
+            || state.SawInitialClientFrozenStateUpload
+            || state.ClientPacketCount < 4)
+        {
+            return false;
+        }
+
+        if (player.SourceState.LastClientCommandDecoded)
+        {
+            return true;
+        }
+
+        if (player.SourceState.LastClientSourceBodyLength is < 38 or > 90)
+        {
+            return false;
+        }
+
+        return player.SourceState.LastClientSourceRole is Ps3SourceClientPayloadRole.SetupControlPayload
+                or Ps3SourceClientPayloadRole.UserCommandCandidate
+                or Ps3SourceClientPayloadRole.AttachedPlayerControlFrame
+                or Ps3SourceClientPayloadRole.AttachedPlayerPayloadFrame
+                or Ps3SourceClientPayloadRole.BinaryControlPayload;
     }
 
     private static bool TryHandleClientFragment(
@@ -2942,13 +3838,16 @@ public sealed class Ps3NativeSourceResponder
         var stagedExplanation = staged.WrappedOrCompressed
             ? $"{explanation} native LZSS-wrapped"
             : explanation;
-        if (!allowFragmentation || staged.Payload.Length <= FragmentPayloadThresholdBytes)
+        if (staged.Payload.Length <= FragmentPayloadThresholdBytes)
         {
             responses.Add(BuildPacket(state, staged.Payload, stagedExplanation, sequenceAdvance));
             return;
         }
 
-        responses.AddRange(BuildQueuedPeerPackets(state, staged.Payload, stagedExplanation, staged.WrappedOrCompressed));
+        var fragmentExplanation = allowFragmentation
+            ? stagedExplanation
+            : $"{stagedExplanation} auto-fragmented";
+        responses.AddRange(BuildQueuedPeerPackets(state, staged.Payload, fragmentExplanation, staged.WrappedOrCompressed));
     }
 
     private static IReadOnlyList<Ps3NativeSourceResponse> BuildQueuedPeerPackets(
@@ -3046,29 +3945,29 @@ public sealed class Ps3NativeSourceResponder
                 state.InitialSetupContinuationStage = 1;
                 return;
             case 3:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 21, 0x44), "generated PS3 Source initial short setup/control");
+                AddPacket(responses, state, BuildCompactAckWindowBody(game, player, state, clientSequence), "generated PS3 Source native initial compact setup/control");
                 state.InitialSetupContinuationStage = 1;
                 return;
             case 4:
                 state.InitialSetupContinuationStage = 1;
                 return;
             case 5:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 21, 0x44), "generated PS3 Source custom-match initial short setup/control");
+                AddPacket(responses, state, BuildCompactAckWindowBody(game, player, state, clientSequence), "generated PS3 Source native custom-match initial compact setup/control");
                 AddPacket(responses, state, BuildResourceStringTableBody(game, player, 581), "generated PS3 Source custom-match resource/class setup table");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 316), "generated PS3 Source custom-match player summary setup tail");
+                AddPacket(responses, state, BuildPlayerSummaryBody(game, player), "generated PS3 Source custom-match player summary setup tail");
                 state.InitialSetupContinuationStage = 1;
                 state.SuppressInitialSetupContinuationResponses = 1;
                 return;
             default:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 21, 0x44), "generated PS3 Source initial short setup/control");
-                AddPacket(responses, state, BuildResourceStringTableBody(game, player, 573), "generated PS3 Source native resource/class setup table");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 81), "generated PS3 Source initial player summary setup tail");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 81), "generated PS3 Source initial player summary setup tail");
+                AddPacket(responses, state, BuildCompactAckWindowBody(game, player, state, clientSequence), "generated PS3 Source native initial compact setup/control");
+                AddPacket(responses, state, BuildQuickMatchInitialApprovalBody(game, player, state), "generated PS3 Source native quick-match markerless setup approval");
+                AddPacket(responses, state, BuildQuickMatchInitialSetupTailBody(game, player, state, 0x4b), "generated PS3 Source native quick-match setup tail");
+                AddPacket(responses, state, BuildQuickMatchInitialSetupTailBody(game, player, state, 0x4c), "generated PS3 Source native quick-match setup tail");
                 return;
         }
     }
 
-    private static void AddInitialSetupContinuationResponses(
+    private void AddInitialSetupContinuationResponses(
         List<Ps3NativeSourceResponse> responses,
         Ps3NativeSourceResponderState state,
         GameManagerSession game,
@@ -3077,24 +3976,33 @@ public sealed class Ps3NativeSourceResponder
         switch (state.InitialSetupVariant)
         {
             case 2:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 21, 0x44), "generated PS3 Source deferred short setup/control");
+                AddPacket(responses, state, BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence), "generated PS3 Source native deferred compact setup/control");
                 AddPacket(responses, state, BuildResourceStringTableBody(game, player, 515), "generated PS3 Source deferred resource/class setup table");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 161), "generated PS3 Source deferred player summary setup tail");
+                AddPacket(responses, state, BuildPlayerSummaryBody(game, player), "generated PS3 Source deferred player summary setup tail");
                 break;
             case 3:
                 AddPacket(responses, state, BuildResourceStringTableBody(game, player, 562), "generated PS3 Source deferred resource/class setup table");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 242), "generated PS3 Source deferred player summary setup tail");
+                AddPacket(responses, state, BuildPlayerSummaryBody(game, player), "generated PS3 Source deferred player summary setup tail");
                 break;
             case 4:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 21, 0x44), "generated PS3 Source custom-match deferred short setup/control");
+                AddPacket(responses, state, BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence), "generated PS3 Source native custom-match deferred compact setup/control");
                 AddPacket(responses, state, BuildResourceStringTableBody(game, player, 583), "generated PS3 Source custom-match deferred resource/class setup table");
-                AddPacket(responses, state, BuildPlayerSummaryBody(game, player, 318), "generated PS3 Source custom-match deferred player summary setup tail");
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 81, 0x47), "generated PS3 Source custom-match deferred setup tail");
+                AddPacket(responses, state, BuildPlayerSummaryBody(game, player), "generated PS3 Source custom-match deferred player summary setup tail");
+                AddPacket(
+                    responses,
+                    state,
+                    BuildEmbeddedPlayerObjectBoundaryBody(game, player, state, 81, 7, maxRecords: 2, 0x47, "custom-match-deferred-setup-tail"),
+                    "generated PS3 Source native custom-match deferred player-object setup tail");
                 break;
             case 5:
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 193, 0x45), "generated PS3 Source custom-match deferred server-info/setup table");
-                AddPacket(responses, state, BuildMixedBinaryBody(game, player, 17, 0x46), "generated PS3 Source custom-match deferred short setup/control");
+                AddCriticalSourceObjectStreamBootstrapResponses(
+                    responses,
+                    state,
+                    game,
+                    player,
+                    "generated PS3 Source native custom-match deferred server-info/sign-on object-stream bootstrap batch");
                 state.SuppressObjectStateIntroResponses = Math.Max(state.SuppressObjectStateIntroResponses, 1);
+                state.SentCriticalSourceNetMessageBootstrap = true;
                 state.SentServerInfo = true;
                 break;
         }
@@ -3121,17 +4029,167 @@ public sealed class Ps3NativeSourceResponder
 
     private static byte[] BuildReliableAssociationAckBody(uint token)
     {
-        return
-        [
-            0x05,
-            (byte)token,
-            (byte)(token >> 8),
-            (byte)(token >> 16),
-            (byte)(token >> 24)
-        ];
+        return Ps3SourceReliableAssociationProbe.EncodeAssociationAck(token);
     }
 
-    private static byte[] BuildPlayerSummaryBody(GameManagerSession game, PlayerSession player, int length)
+    private static byte[] BuildCompactAckWindowBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        ushort acknowledgedClientSequence,
+        byte streamKind = 0x44)
+    {
+        return Ps3SourceCompactControlFrame.EncodeAckWindow21(
+            unchecked((uint)game.GameId),
+            unchecked((uint)player.PlayerId),
+            acknowledgedClientSequence,
+            state.ClientPacketCount,
+            state.NextServerSequence,
+            streamKind);
+    }
+
+    private static byte[] BuildCompactControl17Body(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        byte streamKind)
+    {
+        return Ps3SourceCompactControlFrame.EncodeControl17(
+            unchecked((uint)game.GameId),
+            unchecked((uint)player.PlayerId),
+            player.SourceState.LastClientSourceSequence,
+            state.ClientPacketCount,
+            state.NextServerSequence,
+            streamKind);
+    }
+
+    private static byte[] BuildQuickMatchSetupContinuationBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
+    {
+        return BuildQuickMatchMarkerlessSetupBody(
+            game,
+            player,
+            state,
+            112,
+            0x4a,
+            "quick-match-setup-continuation");
+    }
+
+    private static byte[] BuildQuickMatchInitialApprovalBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
+    {
+        return BuildQuickMatchMarkerlessSetupBody(
+            game,
+            player,
+            state,
+            573,
+            0x45,
+            "quick-match-initial-approval");
+    }
+
+    private static byte[] BuildQuickMatchInitialSetupTailBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        byte streamKind)
+    {
+        return BuildQuickMatchMarkerlessSetupBody(
+            game,
+            player,
+            state,
+            81,
+            streamKind,
+            "quick-match-setup-tail");
+    }
+
+    private static byte[] BuildQuickMatchMarkerlessSetupBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        byte streamKind,
+        string family)
+    {
+        var body = new byte[length];
+        var mapName = string.IsNullOrWhiteSpace(game.MapName) ? "ctf_2fort" : game.MapName;
+        var playerName = SourceDisplayName(player);
+        var rootObjectId = RootSourceObjectId(player);
+        var localPlayerObjectId = PlayerSourceObjectId(player);
+        var mapHash = StableSourceDigest32(mapName);
+        var playerHash = StableSourceDigest32(playerName);
+        var offset = 0;
+        var blockIndex = 0;
+        while (offset < body.Length)
+        {
+            var seed = Encoding.UTF8.GetBytes(string.Create(
+                null,
+                $"{family}|kind={streamKind:x2}|gid={game.GameId}|pid={player.PlayerId}|root={rootObjectId}|local={localPlayerObjectId}|clientSeq={player.SourceState.LastClientSourceSequence}|serverSeq={state.NextServerSequence}|clientPackets={state.ClientPacketCount}|mapHash={mapHash}|playerHash={playerHash}|block={blockIndex}"));
+            var hash = SHA256.HashData(seed);
+            hash.AsSpan(0, Math.Min(hash.Length, body.Length - offset)).CopyTo(body.AsSpan(offset));
+            offset += hash.Length;
+            blockIndex++;
+        }
+
+        MixMarkerlessSetupField(body, 3, unchecked((uint)game.GameId));
+        MixMarkerlessSetupField(body, 11, unchecked((uint)player.PlayerId));
+        MixMarkerlessSetupField(body, 19, rootObjectId);
+        MixMarkerlessSetupField(body, 29, localPlayerObjectId);
+        MixMarkerlessSetupField(body, 37, player.SourceState.LastClientSourceSequence);
+        MixMarkerlessSetupField(body, 43, state.NextServerSequence);
+        MixMarkerlessSetupField(body, 53, unchecked((uint)state.ClientPacketCount));
+        return body;
+    }
+
+    private static void MixMarkerlessSetupField(byte[] body, int offset, uint value)
+    {
+        if (body.Length < offset + 4)
+        {
+            return;
+        }
+
+        Span<byte> field = stackalloc byte[4];
+        PlasmaIntegerCodec.WriteUInt32BigEndian(field, value);
+        for (var i = 0; i < field.Length; i++)
+        {
+            body[offset + i] ^= field[i];
+        }
+    }
+
+    private static void MixMarkerlessSetupField(byte[] body, int offset, ushort value)
+    {
+        if (body.Length < offset + 2)
+        {
+            return;
+        }
+
+        Span<byte> field = stackalloc byte[2];
+        PlasmaIntegerCodec.WriteUInt16BigEndian(field, value);
+        for (var i = 0; i < field.Length; i++)
+        {
+            body[offset + i] ^= field[i];
+        }
+    }
+
+    private static byte[] BuildCompactAckTokenBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        byte streamKind)
+    {
+        return Ps3SourceCompactControlFrame.EncodeAckToken10(
+            unchecked((uint)game.GameId),
+            unchecked((uint)player.PlayerId),
+            player.SourceState.LastClientSourceSequence,
+            state.ClientPacketCount,
+            state.NextServerSequence,
+            streamKind);
+    }
+
+    private static byte[] BuildPlayerSummaryBody(GameManagerSession game, PlayerSession player)
     {
         var activePlayers = ActiveSourcePlayers(game).ToArray();
         if (activePlayers.Length == 0)
@@ -3139,7 +4197,7 @@ public sealed class Ps3NativeSourceResponder
             activePlayers = [player];
         }
 
-        var bitstream = Ps3SourceNativeMessages.BuildPlayerSummary(
+        return Ps3SourceNativeMessages.BuildPlayerSummary(
             (byte)Math.Clamp(activePlayers.Length, 0, 0xff),
             activePlayers
                 .Select(candidate => new Ps3SourcePlayerSummaryEntry(
@@ -3148,61 +4206,31 @@ public sealed class Ps3NativeSourceResponder
                     ScoreOrStat: checked((int)Math.Min(candidate.SourceState.Score, int.MaxValue)),
                     FloatValue: candidate.SourceState.Health))
                 .ToArray());
-        return PadNativeBitstream(bitstream, length, 0x44, game, player);
     }
 
-    private static byte[] BuildResourceStringTableBody(GameManagerSession game, PlayerSession player, int length)
+    private static byte[] BuildResourceStringTableBody(
+        GameManagerSession game,
+        PlayerSession player,
+        int maxEncodedLength,
+        bool padToEncodedLength = false)
     {
-        var bitstream = Ps3SourceNativeMessages.BuildResourceStringTable(BuildResourceStringEntries(game, length));
-        return PadNativeBitstream(bitstream, length, 0x45, game, player, highEntropyPadding: true);
+        var body = Ps3SourceNativeMessages.BuildResourceStringTable(BuildResourceStringEntries(game, maxEncodedLength));
+        if (!padToEncodedLength || body.Length >= maxEncodedLength)
+        {
+            return body;
+        }
+
+        var padded = new byte[maxEncodedLength];
+        body.CopyTo(padded.AsSpan());
+        var seed = unchecked((byte)(0x45 ^ maxEncodedLength ^ game.GameId ^ player.PlayerId));
+        FillDeterministic(padded.AsSpan(body.Length), seed, protectedPrefixBytes: 0);
+        return padded;
     }
 
     private static Ps3SourceResourceStringEntry[] BuildResourceStringEntries(GameManagerSession game, int maxEncodedLength)
     {
         var mapName = string.IsNullOrWhiteSpace(game.MapName) ? "ctf_2fort" : game.MapName;
-        var candidates = new List<Ps3SourceResourceStringEntry>
-        {
-            new("maps/" + mapName + ".bsp", "GAME"),
-            new("motd.txt", "GAME"),
-            new("cfg/MODSETTINGS.CFG", "GAME"),
-            new("cfg/LISTENSERVER.CFG", "GAME"),
-            new("maps/" + mapName + ".nav", "GAME"),
-            new("scripts/items/items_game.txt", "GAME"),
-            new("scripts/game_sounds_manifest.txt", "GAME"),
-            new("resource/ClientScheme.res", "GAME"),
-            new("resource/SourceScheme.res", "GAME"),
-            new("materials/vgui/maps/menu_thumb_" + mapName + ".vmt", "GAME")
-        };
-        candidates.InsertRange(
-            2,
-            Tf2Ps3SourceCatalog.BootstrapSendTables.Select(static sendTable => new Ps3SourceResourceStringEntry(sendTable, "SENDTABLE")));
-
-        var entries = new List<Ps3SourceResourceStringEntry>(candidates.Count);
-        foreach (var candidate in candidates)
-        {
-            entries.Add(candidate);
-            if (EncodedResourceStringTableLength(entries) <= maxEncodedLength)
-            {
-                continue;
-            }
-
-            entries.RemoveAt(entries.Count - 1);
-            break;
-        }
-
-        return entries.ToArray();
-    }
-
-    private static int EncodedResourceStringTableLength(IReadOnlyList<Ps3SourceResourceStringEntry> entries)
-    {
-        var length = 7; // signed -1, message id, entry count
-        foreach (var entry in entries)
-        {
-            length += Encoding.UTF8.GetByteCount(entry.ResourceName) + 1;
-            length += Encoding.UTF8.GetByteCount(entry.Classification) + 1;
-        }
-
-        return length;
+        return Tf2Ps3SourceCatalog.BuildBootstrapResourceStringEntries(mapName, maxEncodedLength);
     }
 
     private static byte[] BuildLoadingMotdEventBody(GameManagerSession game, PlayerSession player)
@@ -3241,25 +4269,6 @@ public sealed class Ps3NativeSourceResponder
             .Replace("\"", "\\\"", StringComparison.Ordinal);
     }
 
-    private static byte[] BuildServerInfoBody(GameManagerSession game, PlayerSession player, int length)
-    {
-        var bitstream = Ps3SourceNativeMessages.BuildServerInfo(new Ps3SourceServerInfo(
-            ServerName: game.Name.Length == 0 ? "A Game" : game.Name,
-            MapName: game.MapName.Length == 0 ? "ctf_2fort" : game.MapName,
-            GameDirectory: "tf",
-            Description: player.Name.Length == 0 ? "Player" : player.Name,
-            ListenPortOrNetworkShort: (short)Math.Clamp(game.MaxPlayers, 1, 32),
-            CurrentPlayers: (byte)Math.Clamp(game.SourceVisiblePlayerCount, 0, 32),
-            MaxPlayers: (byte)Math.Clamp(game.MaxPlayers, 1, 32),
-            BotOrReservedCount: 0,
-            ServerVariantCode: 100,
-            PlatformCode: 0x6c,
-            PasswordOrPrivateFlag: 0,
-            ClientVisibleFlag: 1,
-            ConnectionAddress: game.AdvertisedEndpoint));
-        return PadNativeBitstream(bitstream, length, 0x49, game, player);
-    }
-
     private static byte[] BuildDeterministicBinaryBody(GameManagerSession game, PlayerSession player, int length, byte seed)
     {
         var body = new byte[length];
@@ -3275,67 +4284,41 @@ public sealed class Ps3NativeSourceResponder
         return body;
     }
 
-    private static byte[] BuildHighEntropyBinaryBody(GameManagerSession game, PlayerSession player, int length, uint seed)
-    {
-        var body = new byte[length];
-        FillHighEntropyDeterministic(body, seed ^ checked((uint)game.GameId) ^ checked((uint)player.PlayerId));
-        if (length is >= 128 and < 256)
-        {
-            for (var i = 0; i < body.Length; i++)
-            {
-                body[i] = (byte)((i * 251) + seed + game.GameId + player.PlayerId);
-            }
-        }
-
-        return body;
-    }
-
-    private static byte[] BuildLateLargeCommandOpaqueContinuationBody(
-        GameManagerSession game,
-        PlayerSession player,
-        Ps3NativeSourceResponderState state)
-    {
-        var body = new byte[630];
-        EarlyLoadLargeCommandContinuationPrefix.CopyTo(body, 0);
-        WritePlayerStateLinkTail(
-            body,
-            [0x00000010u, 0x00000012u, 0x0000000fu, 0x00000009u],
-            0x0000001du);
-        return body;
-    }
-
     private static SourceObjectStateBatch[] BuildLateLargeCommandPrepBatches(
         GameManagerSession game,
         PlayerSession player,
         Ps3NativeSourceResponderState state)
     {
-        var linkedObjectId = RootSourceObjectId(player);
+        _ = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            602,
+            0xb1,
+            220,
+            "late-large-command-prep-segment-a",
+            out var segmentA,
+            out _);
+        _ = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            606,
+            0xb2,
+            221,
+            "late-large-command-prep-segment-b",
+            out var segmentB,
+            out _);
         return
         [
             new SourceObjectStateBatch(
-                BuildQueuedPlayerStateLinkBody(
-                    game,
-                    player,
-                    state,
-                    length: 602,
-                    prefixLength: 578,
-                    objectIds: [FrozenStateObjectId(player, 2), FrozenStateObjectId(player, 3)],
-                    linkedObjectId: linkedObjectId,
-                    family: "late-large-command-prep-segment-a"),
+                segmentA,
                 SequenceAdvance: 145,
-                Explanation: "generated PS3 Source native late large-command prep state-link segment A"),
+                Explanation: "native PS3 Source late large-command prep snapshot/entity-delta segment A"),
             new SourceObjectStateBatch(
-                BuildQueuedPlayerStateLinkBody(
-                    game,
-                    player,
-                    state,
-                    length: 606,
-                    prefixLength: 570,
-                    objectIds: [FrozenStateObjectId(player, 4), FrozenStateObjectId(player, 1), FrozenStateObjectId(player, 0)],
-                    linkedObjectId: linkedObjectId,
-                    family: "late-large-command-prep-segment-b"),
+                segmentB,
                 SequenceAdvance: 143,
-                Explanation: "generated PS3 Source native late large-command prep state-link segment B")
+                Explanation: "native PS3 Source late large-command prep snapshot/entity-delta segment B")
         ];
     }
 
@@ -3344,39 +4327,63 @@ public sealed class Ps3NativeSourceResponder
         PlayerSession player,
         Ps3NativeSourceResponderState state)
     {
-        return BuildQueuedPlayerStateLinkBody(
+        _ = BuildPlayerStateLinkSlotReplacementBody(
             game,
             player,
             state,
-            length: 860,
-            prefixLength: 848,
-            objectIds: [FrozenStateObjectId(player, 5)],
-            linkedObjectId: RootSourceObjectId(player),
-            family: "late-large-command-followup");
-    }
-
-    private static byte[] BuildPostTerminalMapLoadStateAckBody(PlayerSession player)
-    {
-        var body = new byte[PostTerminalMapLoadStateAckPrefix.Length + 24];
-        PostTerminalMapLoadStateAckPrefix.CopyTo(body, 0);
-        var linkedObjectId = RootSourceObjectId(player);
-        var secondaryObjectId = linkedObjectId < uint.MaxValue
-            ? linkedObjectId + 1
-            : linkedObjectId;
-        WritePlayerStateLinkTail(body, [0x00000003u, secondaryObjectId], linkedObjectId);
+            860,
+            0xb3,
+            222,
+            "late-large-command-followup",
+            out var body,
+            out _);
         return body;
     }
 
-    private static byte[] BuildPostRosterShortGameplayAckBody(PlayerSession player)
+    private static byte[] BuildPostTerminalMapLoadStateAckBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
-        var body = new byte[56];
-        PostRosterShortGameplayAckPrefix.CopyTo(body, 0);
-        var linkedObjectId = player.PlayerId > 0
-            ? checked((uint)player.PlayerId)
-            : RootSourceObjectId(player);
-        var objectId = linkedObjectId > 0x17 ? linkedObjectId - 0x17 : 0x000000aeu;
-        WritePlayerStateLinkTail(body, [objectId], linkedObjectId);
+        _ = BuildPlayerStateLinkSlotReplacementBody(
+            game,
+            player,
+            state,
+            122,
+            0xb4,
+            223,
+            "post-terminal-map-load-state-ack",
+            out var body,
+            out _);
         return body;
+    }
+
+    private static byte[] BuildPostRosterClientObjectBatchAckBody(GameManagerSession game, PlayerSession player)
+    {
+        var state = player.NativeSourceResponder;
+        AdvanceNativeSourceWorldState(game, player);
+        var entityDeltas = PackSnapshotEntityDeltaSections(
+            [
+                BuildSnapshotMicroPlayerResourceDelta(game, player),
+                BuildSnapshotMicroPlayerEntityDelta(game, player),
+                BuildSnapshotMicroGameplayRulesDelta(game, player),
+                BuildSnapshotMicroRoundTimerDelta(game)
+            ]);
+        var frame = new Ps3SourceSnapshotFrame(
+            state.SnapshotFrameIndex,
+            state.SnapshotBaseFrame,
+            UpdateFlags: 0x01,
+            PendingCount: 1,
+            HasEntityDelta: true,
+            ExtraSections: entityDeltas);
+        state.SnapshotBaseFrame = state.SnapshotFrameIndex;
+        state.SnapshotFrameIndex++;
+        return Ps3SourceSnapshotFrameBuilder.Encode(frame);
+    }
+
+    private static byte[] BuildPostRosterShortGameplayAckBody(GameManagerSession game, PlayerSession player)
+    {
+        return BuildPostRosterClientObjectBatchAckBody(game, player);
     }
 
     private static void WritePlayerStateLinkTail(byte[] body, ReadOnlySpan<uint> objectIds, uint linkedObjectId)
@@ -3396,7 +4403,7 @@ public sealed class Ps3NativeSourceResponder
         tail.CopyTo(body.AsSpan(body.Length - tail.Length));
     }
 
-    private static byte[] BuildQueuedPlayerStateLinkBody(
+    private static byte[] BuildNativeQueuedPlayerStateLinkBody(
         GameManagerSession game,
         PlayerSession player,
         Ps3NativeSourceResponderState state,
@@ -3422,13 +4429,56 @@ public sealed class Ps3NativeSourceResponder
 
         var body = new byte[length];
         var seed = StableSourceDigest32(BuildQueuedPlayerStateLinkSeed(game, player, state, family, objectIds, linkedObjectId));
-        FillHighEntropyDeterministic(body.AsSpan(0, prefixLength), seed);
+        WriteQueuedBoundaryBytes(body.AsSpan(0, prefixLength), game, player, state, (byte)seed, family);
         tail.CopyTo(body.AsSpan(prefixLength, tail.Length));
         if (prefixLength + tail.Length < length)
         {
-            FillHighEntropyDeterministic(body.AsSpan(prefixLength + tail.Length), seed ^ 0xa5a55a5au);
+            WriteQueuedBoundaryBytes(
+                body.AsSpan(prefixLength + tail.Length),
+                game,
+                player,
+                state,
+                (byte)(seed >> 8),
+                family + ":tail");
         }
 
+        return body;
+    }
+
+    private static byte[] BuildNativeQueuedLoadingPlayerStateLinkBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        int prefixLength,
+        int maxRecords,
+        string family)
+    {
+        var offset = Math.Min(prefixLength, length);
+        var availableRecordCount = Math.Max(0, (length - offset) / Ps3SourcePlayerStateLinkRecord.Length);
+        var recordCount = Math.Min(maxRecords, availableRecordCount);
+        var objectIds = RepeatingFrozenStateObjectIds(player, recordCount).ToArray();
+        return BuildNativeQueuedPlayerStateLinkBody(
+            game,
+            player,
+            state,
+            length,
+            prefixLength,
+            objectIds,
+            RootSourceObjectId(player),
+            family);
+    }
+
+    private static byte[] BuildQueuedBoundaryOnlyBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        byte streamKind,
+        string family)
+    {
+        var body = new byte[length];
+        WriteQueuedBoundaryBytes(body, game, player, state, streamKind, family);
         return body;
     }
 
@@ -3469,45 +4519,33 @@ public sealed class Ps3NativeSourceResponder
         return seed.ToString();
     }
 
-    private static byte[] BuildMixedBinaryBody(GameManagerSession game, PlayerSession player, int length, byte seed)
+    private static SourceObjectStateBatch[] BuildObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
-        var body = new byte[length];
-        for (var i = 0; i < body.Length; i++)
+        return state.InitialSetupVariant switch
         {
-            body[i] = (byte)(0x20 + (((i * 7) + seed + game.GameId + player.PlayerId) % 0x5f));
-        }
-
-        if (length >= 12)
-        {
-            body[0] = seed;
-            body[1] = (byte)(game.GameId >> 8);
-            body[2] = (byte)game.GameId;
-            body[3] = (byte)player.PlayerId;
-        }
-
-        return body;
-    }
-
-    private static SourceObjectStateBatch[] BuildObjectStateIntroBatches(GameManagerSession game, PlayerSession player, int initialSetupVariant)
-    {
-        return initialSetupVariant switch
-        {
-            2 => BuildVariant2ObjectStateIntroBatches(game, player),
-            3 => BuildVariant3ObjectStateIntroBatches(game, player),
-            4 => BuildVariant4ObjectStateIntroBatches(game, player),
-            5 => BuildVariant5ObjectStateIntroBatches(game, player),
-            _ => BuildStandardObjectStateIntroBatches(game, player)
+            2 => BuildVariant2ObjectStateIntroBatches(game, player, state),
+            3 => BuildVariant3ObjectStateIntroBatches(game, player, state),
+            4 => BuildVariant4ObjectStateIntroBatches(game, player, state),
+            5 => BuildVariant5ObjectStateIntroBatches(game, player, state),
+            _ => BuildStandardObjectStateIntroBatches(game, player, state)
         };
     }
 
-    private static SourceObjectStateBatch[] BuildStandardObjectStateIntroBatches(GameManagerSession game, PlayerSession player)
+    private static SourceObjectStateBatch[] BuildStandardObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
+        var playerDisplayName = SourceDisplayName(player);
         var peers = FrozenStateNamedPeers(player);
         var introPeers = peers.Take(4).ToArray();
         var secondaryPeers = peers.Skip(4).Take(2).ToArray();
         if (secondaryPeers.Length == 0)
         {
-            secondaryPeers = [(PlayerSourceObjectId(player), player.Name)];
+            secondaryPeers = [(PlayerSourceObjectId(player), playerDisplayName)];
         }
         var hostRefreshPeers = FrozenStateNamedPeersById(player, 0x9c, 0x6d);
         if (hostRefreshPeers.Length < 2)
@@ -3522,11 +4560,11 @@ public sealed class Ps3NativeSourceResponder
                 7,
                 "generated PS3 Source native COc FrozenStateObject intro batch"),
             new(
-                BuildFrozenStateObjectBody(game, player, 78, 4, [(PlayerSourceObjectId(player), player.Name), .. secondaryPeers.Take(1)]),
+                BuildFrozenStateObjectBody(game, player, 78, 4, [(PlayerSourceObjectId(player), playerDisplayName), .. secondaryPeers.Take(1)]),
                 3,
                 "generated PS3 Source native COc FrozenStateObject player batch"),
             new(
-                BuildFrozenStateObjectBody(game, player, 60, 23, [(PlayerSourceObjectId(player), player.Name)]),
+                BuildFrozenStateObjectBody(game, player, 60, 23, [(PlayerSourceObjectId(player), playerDisplayName)]),
                 6,
                 "generated PS3 Source native COc FrozenStateObject focus batch"),
             new(
@@ -3538,119 +4576,132 @@ public sealed class Ps3NativeSourceResponder
                 8,
                 "generated PS3 Source native object-state binary boundary"),
             new(
-                BuildMixedBinaryBody(game, player, 21, 0x44),
+                BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence, 0x44),
                 6,
-                "generated PS3 Source native object-state short refresh"),
+                "generated PS3 Source native object-state compact ack/window refresh"),
             new(
-                BuildPlayerStateLinkBody(game, player, 49, 25, maxRecords: 2),
+                BuildNativeQueuedLoadingPlayerStateLinkBody(game, player, state, 49, 25, 2, "object-intro-state-link-a"),
                 7,
                 "generated PS3 Source native PNG state-link intro batch"),
             new(
-                BuildPlayerStateLinkBody(game, player, 63, 27, maxRecords: 3),
+                BuildNativeQueuedLoadingPlayerStateLinkBody(game, player, state, 63, 15, 4, "object-intro-state-link-b"),
                 7,
                 "generated PS3 Source native PNG state-link mesh batch"),
             new(
-                BuildPlayerStateLinkBody(game, player, 116, 20, maxRecords: 8),
+                BuildNativeQueuedLoadingPlayerStateLinkBody(game, player, state, 116, 20, 8, "object-intro-state-link-c"),
                 7,
                 "generated PS3 Source native PNG state-link mesh extension batch"),
             new(
-                BuildPlayerStateLinkBody(game, player, 28, 4, maxRecords: 2),
+                BuildNativeQueuedLoadingPlayerStateLinkBody(game, player, state, 28, 4, 2, "object-intro-state-link-tail"),
                 3,
                 "generated PS3 Source native PNG state-link object-intro tail")
         ];
     }
 
-    private static SourceObjectStateBatch[] BuildVariant2ObjectStateIntroBatches(GameManagerSession game, PlayerSession player)
+    private static SourceObjectStateBatch[] BuildVariant2ObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
         return
         [
-            new(BuildMixedBinaryBody(game, player, 17, 0x51), 1, "generated PS3 Source variant2 object-intro short boundary"),
-            new(BuildMixedBinaryBody(game, player, 17, 0x52), 1, "generated PS3 Source variant2 object-intro short boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x51), 1, "generated PS3 Source variant2 object-intro compact control boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x52), 1, "generated PS3 Source variant2 object-intro compact control boundary"),
             new(BuildFrozenStateObjectBody(game, player, 78, 4, FrozenStateNamedPeers(player).Take(2).ToArray()), 3, "generated PS3 Source variant2 COc FrozenStateObject batch"),
             new(BuildFrozenStateObjectBody(game, player, 198, 24, FrozenStateNamedPeers(player).Take(4).ToArray()), 7, "generated PS3 Source variant2 COc FrozenStateObject batch"),
-            new(BuildMixedBinaryBody(game, player, 21, 0x53), 1, "generated PS3 Source variant2 object-intro short boundary"),
+            new(BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence, 0x53), 1, "generated PS3 Source variant2 object-intro compact ack/window boundary"),
             new(BuildFrozenStateObjectBody(game, player, 49, 9, FrozenStateNamedPeers(player).Take(1).ToArray()), 3, "generated PS3 Source variant2 COc FrozenStateObject tail", SuppressAfter: 1),
             new(BuildFrozenStateObjectBody(game, player, 159, 21, FrozenStateNamedPeers(player).Take(3).ToArray()), 6, "generated PS3 Source variant2 COc FrozenStateObject tail"),
-            new(BuildMixedBinaryBody(game, player, 53, 0x54), 3, "generated PS3 Source variant2 FrozenStateObject native boundary"),
-            new(BuildMixedBinaryBody(game, player, 102, 0x55), 4, "generated PS3 Source variant2 object-state mixed boundary"),
-            new(BuildPlayerStateLinkBody(game, player, 28, 4, maxRecords: 2), 3, "generated PS3 Source variant2 PNG state-link object-intro tail")
+            new(BuildEmbeddedFrozenStateBoundaryBody(game, player, state, 53, 16, maxRecords: 1, 0x54, "variant2-frozen-state-boundary"), 3, "generated PS3 Source variant2 COc FrozenStateObject native boundary"),
+            new(BuildEmbeddedPlayerStateLinkBoundaryBody(game, player, state, 102, 18, maxRecords: 7, 0x55, "variant2-object-state-links"), 4, "generated PS3 Source variant2 PNG object-state link boundary"),
+            new(BuildPurePlayerStateLinkBody(player, 2), 3, "generated PS3 Source variant2 PNG state-link object-intro tail without generated prefix")
         ];
     }
 
-    private static SourceObjectStateBatch[] BuildVariant3ObjectStateIntroBatches(GameManagerSession game, PlayerSession player)
+    private static SourceObjectStateBatch[] BuildVariant3ObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
         return
         [
             new(BuildFrozenStateObjectBody(game, player, 73, 7, FrozenStateNamedPeers(player).Take(2).ToArray()), 3, "generated PS3 Source variant3 COc FrozenStateObject batch"),
             new(BuildFrozenStateObjectBody(game, player, 195, 23, FrozenStateNamedPeers(player).Take(4).ToArray()), 7, "generated PS3 Source variant3 COc FrozenStateObject batch"),
-            new(BuildMixedBinaryBody(game, player, 56, 0x61), 3, "generated PS3 Source variant3 object-state mixed boundary"),
-            new(BuildMixedBinaryBody(game, player, 17, 0x62), 1, "generated PS3 Source variant3 object-intro short boundary"),
-            new(BuildPlayerStateLinkBody(game, player, 116, 20, maxRecords: 8), 7, "generated PS3 Source variant3 PNG state-link mesh extension batch"),
-            new(BuildMixedBinaryBody(game, player, 74, 0x63), 4, "generated PS3 Source variant3 object-state mixed boundary"),
-            new(BuildMixedBinaryBody(game, player, 21, 0x64), 1, "generated PS3 Source variant3 object-intro short boundary"),
+            new(BuildEmbeddedPlayerStateLinkBoundaryBody(game, player, state, 56, 8, maxRecords: 4, 0x61, "variant3-object-state-links-a"), 3, "generated PS3 Source variant3 PNG object-state link boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x62), 1, "generated PS3 Source variant3 object-intro compact control boundary"),
+            new(BuildPurePlayerStateLinkBody(player, 8), 7, "generated PS3 Source variant3 PNG state-link mesh extension batch without generated prefix"),
+            new(BuildEmbeddedFrozenStateBoundaryBody(game, player, state, 74, 0, maxRecords: 2, 0x63, "variant3-frozen-state-boundary-a"), 4, "generated PS3 Source variant3 COc FrozenStateObject boundary"),
+            new(BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence, 0x64), 1, "generated PS3 Source variant3 object-intro compact ack/window boundary"),
             new(BuildFrozenStateObjectBody(game, player, 159, 21, FrozenStateNamedPeers(player).Take(3).ToArray()), 6, "generated PS3 Source variant3 COc FrozenStateObject tail", SuppressAfter: 1),
-            new(BuildPlayerStateLinkBody(game, player, 28, 4, maxRecords: 2), 3, "generated PS3 Source variant3 PNG state-link object-intro tail"),
-            new(BuildMixedBinaryBody(game, player, 53, 0x65), 3, "generated PS3 Source variant3 FrozenStateObject native boundary"),
-            new(BuildMixedBinaryBody(game, player, 53, 0x66), 3, "generated PS3 Source variant3 FrozenStateObject native boundary"),
-            new(BuildMixedBinaryBody(game, player, 102, 0x67), 4, "generated PS3 Source variant3 object-state mixed boundary"),
-            new(BuildMixedBinaryBody(game, player, 56, 0x68), 3, "generated PS3 Source variant3 object-state mixed boundary")
+            new(BuildPurePlayerStateLinkBody(player, 2), 3, "generated PS3 Source variant3 PNG state-link object-intro tail without generated prefix"),
+            new(BuildEmbeddedFrozenStateBoundaryBody(game, player, state, 53, 16, maxRecords: 1, 0x65, "variant3-frozen-state-boundary-b"), 3, "generated PS3 Source variant3 COc FrozenStateObject native boundary"),
+            new(BuildEmbeddedFrozenStateBoundaryBody(game, player, state, 53, 16, maxRecords: 1, 0x66, "variant3-frozen-state-boundary-c"), 3, "generated PS3 Source variant3 COc FrozenStateObject native boundary"),
+            new(BuildEmbeddedPlayerStateLinkBoundaryBody(game, player, state, 102, 18, maxRecords: 7, 0x67, "variant3-object-state-links-b"), 4, "generated PS3 Source variant3 PNG object-state link boundary"),
+            new(BuildEmbeddedPlayerStateLinkBoundaryBody(game, player, state, 56, 8, maxRecords: 4, 0x68, "variant3-object-state-links-c"), 3, "generated PS3 Source variant3 PNG object-state link boundary")
         ];
     }
 
-    private static SourceObjectStateBatch[] BuildVariant4ObjectStateIntroBatches(GameManagerSession game, PlayerSession player)
+    private static SourceObjectStateBatch[] BuildVariant4ObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
         return
         [
-            new(BuildMixedBinaryBody(game, player, 17, 0x71), 1, "generated PS3 Source custom-match variant4 object-intro short boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x71), 1, "generated PS3 Source custom-match variant4 object-intro compact control boundary"),
             new(BuildPlayerObjectBody(game, player, 138, 27), 6, "generated PS3 Source custom-match variant4 player-object batch"),
             new(BuildPlayerObjectBody(game, player, 177, 25), 7, "generated PS3 Source custom-match variant4 player-object batch"),
-            new(BuildMixedBinaryBody(game, player, 21, 0x72), 1, "generated PS3 Source custom-match variant4 object-intro short boundary"),
+            new(BuildCompactAckWindowBody(game, player, state, player.SourceState.LastClientSourceSequence, 0x72), 1, "generated PS3 Source custom-match variant4 object-intro compact ack/window boundary"),
             new(BuildPlayerObjectBody(game, player, 81, 7), 3, "generated PS3 Source custom-match variant4 player-object tail"),
             new(BuildPlayerObjectBody(game, player, 106, 4), 4, "generated PS3 Source custom-match variant4 roster-object tail"),
             new(BuildPlayerObjectBody(game, player, 120, 9), 4, "generated PS3 Source custom-match variant4 player-object tail"),
-            new(BuildMixedBinaryBody(game, player, 60, 0x73), 3, "generated PS3 Source custom-match variant4 mixed boundary"),
-            new(BuildPlayerStateLinkBody(game, player, 70, 10, maxRecords: 5), 4, "generated PS3 Source custom-match variant4 PNG state-link boundary")
+            new(BuildEmbeddedFrozenStateBoundaryBody(game, player, state, 60, 23, maxRecords: 1, 0x73, "variant4-frozen-state-boundary"), 3, "generated PS3 Source custom-match variant4 COc FrozenStateObject boundary"),
+            new(BuildPurePlayerStateLinkBody(player, 5), 4, "generated PS3 Source custom-match variant4 PNG state-link boundary without generated prefix")
         ];
     }
 
-    private static SourceObjectStateBatch[] BuildVariant5ObjectStateIntroBatches(GameManagerSession game, PlayerSession player)
+    private static SourceObjectStateBatch[] BuildVariant5ObjectStateIntroBatches(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state)
     {
         return
         [
-            new(BuildMixedBinaryBody(game, player, 17, 0x81), 1, "generated PS3 Source custom-match variant5 object-intro short boundary"),
-            new(BuildMixedBinaryBody(game, player, 17, 0x82), 1, "generated PS3 Source custom-match variant5 object-intro short boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x81), 1, "generated PS3 Source custom-match variant5 object-intro compact control boundary"),
+            new(BuildCompactControl17Body(game, player, state, 0x82), 1, "generated PS3 Source custom-match variant5 object-intro compact control boundary"),
             new(BuildPlayerObjectBody(game, player, 294, 18), 8, "generated PS3 Source custom-match variant5 player-object batch"),
             new(BuildPlayerObjectBody(game, player, 99, 12), 4, "generated PS3 Source custom-match variant5 player-object tail"),
-            new(BuildMixedBinaryBody(game, player, 10, 0x83), 1, "generated PS3 Source custom-match variant5 object-intro short boundary"),
+            new(BuildCompactAckTokenBody(game, player, state, 0x83), 1, "generated PS3 Source custom-match variant5 object-intro compact ack-token boundary"),
             new(BuildPlayerObjectBody(game, player, 77, 8), 4, "generated PS3 Source custom-match variant5 roster-object batch"),
-            new(BuildPlayerStateLinkBody(game, player, 91, 13, maxRecords: 6), 4, "generated PS3 Source custom-match variant5 PNG state-link boundary"),
-            new(BuildPlayerStateLinkBody(game, player, 35, 11, maxRecords: 2), 3, "generated PS3 Source custom-match variant5 PNG state-link boundary"),
-            new(BuildMixedBinaryBody(game, player, 32, 0x84), 2, "generated PS3 Source custom-match variant5 mixed boundary")
+            new(BuildPurePlayerStateLinkBody(player, 6), 4, "generated PS3 Source custom-match variant5 PNG state-link boundary without generated prefix"),
+            new(BuildPurePlayerStateLinkBody(player, 2), 3, "generated PS3 Source custom-match variant5 PNG state-link boundary without generated prefix"),
+            new(BuildEmbeddedPlayerStateLinkBoundaryBody(game, player, state, 32, 8, maxRecords: 2, 0x84, "variant5-object-state-links"), 2, "generated PS3 Source custom-match variant5 PNG object-state link boundary")
         ];
     }
 
     private static SourceObjectStateBatch[] BuildPostRosterFrozenStateObjectBatches(GameManagerSession game, PlayerSession player)
     {
+        var playerDisplayName = SourceDisplayName(player);
         var peers = FrozenStateNamedPeers(player);
         var introPeers = peers.Take(4).ToArray();
         var secondaryPeers = peers.Skip(4).Take(2).ToArray();
         if (secondaryPeers.Length == 0)
         {
-            secondaryPeers = [(PlayerSourceObjectId(player), player.Name)];
+            secondaryPeers = [(PlayerSourceObjectId(player), playerDisplayName)];
         }
 
         return
         [
             new(
-                BuildFrozenStateObjectBody(game, player, 173, 25, introPeers, useRetailPostRosterPrefix: true),
+                BuildFrozenStateObjectBody(game, player, 173, 25, introPeers),
                 7,
                 "generated PS3 Source native COc FrozenStateObject intro batch"),
             new(
-                BuildFrozenStateObjectBody(game, player, 78, 4, [(PlayerSourceObjectId(player), player.Name), .. secondaryPeers.Take(1)], useRetailPostRosterPrefix: true),
+                BuildFrozenStateObjectBody(game, player, 78, 4, [(PlayerSourceObjectId(player), playerDisplayName), .. secondaryPeers.Take(1)]),
                 3,
                 "generated PS3 Source native COc FrozenStateObject player batch"),
             new(
-                BuildFrozenStateObjectBody(game, player, 60, 23, [(PlayerSourceObjectId(player), player.Name)], useRetailPostRosterPrefix: true),
+                BuildFrozenStateObjectBody(game, player, 60, 23, [(PlayerSourceObjectId(player), playerDisplayName)]),
                 6,
                 "generated PS3 Source native COc FrozenStateObject focus batch")
         ];
@@ -3658,12 +4709,11 @@ public sealed class Ps3NativeSourceResponder
 
     private static (uint ObjectId, string Name)[] FrozenStateNamedPeers(PlayerSession player)
     {
-        var names = new[] { "GR-NIGHT", "jojomissle", "hypertwins14", "FORdaLiberty", "MartinMathieu", "Peer" };
         var peers = player.SourceState.FrozenStatePeerObjectIds.Length == 0
             ? [0x9fU, 0x93U, 0x95U, 0x9cU, 0x6dU]
             : player.SourceState.FrozenStatePeerObjectIds;
         return peers
-            .Select((objectId, index) => (objectId, names[Math.Min(index, names.Length - 1)]))
+            .Select((objectId, index) => (objectId, SourcePeerDisplayName(player, objectId, index)))
             .ToArray();
     }
 
@@ -3678,26 +4728,75 @@ public sealed class Ps3NativeSourceResponder
             .ToArray();
     }
 
+    private static string SourceDisplayName(PlayerSession player)
+    {
+        return SanitizeSourceObjectName(player.Name, $"player{Math.Max(1, player.PlayerId)}");
+    }
+
+    private static string SourcePeerDisplayName(PlayerSession player, uint objectId, int index)
+    {
+        if (objectId == PlayerSourceObjectId(player) || objectId == RootSourceObjectId(player))
+        {
+            return SourceDisplayName(player);
+        }
+
+        return SanitizeSourceObjectName($"obj_{objectId:x8}", $"peer{index + 1}");
+    }
+
+    private static string SanitizeSourceObjectName(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+
+        Span<char> buffer = stackalloc char[21];
+        var count = 0;
+        var replacementCount = 0;
+        var plausibleCount = 0;
+        foreach (var ch in value.Trim())
+        {
+            if (ch < 0x20 || ch > 0x7e)
+            {
+                continue;
+            }
+
+            if (ch == '?')
+            {
+                replacementCount++;
+            }
+
+            if (char.IsLetterOrDigit(ch) || ch is '_' or '-' or '[' or ']' or '(' or ')' or ' ')
+            {
+                plausibleCount++;
+            }
+
+            buffer[count++] = ch;
+            if (count >= buffer.Length)
+            {
+                break;
+            }
+        }
+
+        if (count == 0
+            || plausibleCount < Math.Max(2, count / 2)
+            || replacementCount > Math.Max(0, count / 4))
+        {
+            return fallback;
+        }
+
+        return new string(buffer[..count]).Trim();
+    }
+
     private static byte[] BuildFrozenStateObjectBody(
         GameManagerSession game,
         PlayerSession player,
         int length,
         int prefixLength,
-        IReadOnlyList<(uint ObjectId, string Name)> records,
-        bool useRetailPostRosterPrefix = false)
+        IReadOnlyList<(uint ObjectId, string Name)> records)
     {
         var body = new byte[length];
-        var prefix = useRetailPostRosterPrefix
-            ? PostRosterFrozenStatePrefix(length, prefixLength)
-            : ReadOnlySpan<byte>.Empty;
-        if (!prefix.IsEmpty)
-        {
-            prefix.CopyTo(body);
-        }
-        else
-        {
-            FillDeterministic(body.AsSpan(0, Math.Min(prefixLength, body.Length)), (byte)(0x5a ^ game.GameId ^ player.PlayerId), 0);
-        }
+        FillDeterministic(body.AsSpan(0, Math.Min(prefixLength, body.Length)), (byte)(0x5a ^ game.GameId ^ player.PlayerId), 0);
 
         var offset = Math.Min(prefixLength, body.Length);
         foreach (var record in records)
@@ -3711,31 +4810,12 @@ public sealed class Ps3NativeSourceResponder
             offset += 37;
         }
 
-        if (useRetailPostRosterPrefix
-            && length == 60
-            && prefixLength == 23
-            && records.Count == 1
-            && body.Length > 0)
-        {
-            body[^1] = 1;
-        }
-        else if (offset < body.Length)
+        if (offset < body.Length)
         {
             FillDeterministic(body.AsSpan(offset), (byte)(0x71 ^ game.GameId ^ player.PlayerId), 0);
         }
 
         return body;
-    }
-
-    private static ReadOnlySpan<byte> PostRosterFrozenStatePrefix(int length, int prefixLength)
-    {
-        return (length, prefixLength) switch
-        {
-            (173, 25) => PostRosterFrozenStateIntroPrefix,
-            (78, 4) => PostRosterFrozenStatePlayerPrefix,
-            (60, 23) => PostRosterFrozenStateFocusPrefix,
-            _ => ReadOnlySpan<byte>.Empty
-        };
     }
 
     private static byte[] BuildPlayerStateLinkBody(GameManagerSession game, PlayerSession player, int length, int prefixLength, int maxRecords = int.MaxValue)
@@ -3759,6 +4839,164 @@ public sealed class Ps3NativeSourceResponder
         }
 
         return body;
+    }
+
+    private static byte[] BuildEmbeddedFrozenStateBoundaryBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        int prefixLength,
+        int maxRecords,
+        byte streamKind,
+        string family)
+    {
+        var body = new byte[length];
+        var offset = Math.Min(prefixLength, body.Length);
+        WriteQueuedBoundaryBytes(body.AsSpan(0, offset), game, player, state, streamKind, family);
+
+        foreach (var record in FrozenStateNamedPeers(player).Take(maxRecords))
+        {
+            if (offset + Ps3SourceEmbeddedObjectWireRecord.FrozenStateObjectLength > body.Length)
+            {
+                break;
+            }
+
+            WriteFrozenStateObject(
+                body.AsSpan(offset, Ps3SourceEmbeddedObjectWireRecord.FrozenStateObjectLength),
+                record.ObjectId,
+                RootSourceObjectId(player),
+                record.Name);
+            offset += Ps3SourceEmbeddedObjectWireRecord.FrozenStateObjectLength;
+        }
+
+        WriteQueuedBoundaryBytes(body.AsSpan(offset), game, player, state, (byte)(streamKind ^ 0x80), family + ":tail");
+        return body;
+    }
+
+    private static byte[] BuildEmbeddedPlayerStateLinkBoundaryBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        int prefixLength,
+        int maxRecords,
+        byte streamKind,
+        string family)
+    {
+        var body = new byte[length];
+        var offset = Math.Min(prefixLength, body.Length);
+        WriteQueuedBoundaryBytes(body.AsSpan(0, offset), game, player, state, streamKind, family);
+
+        var linkedObjectId = RootSourceObjectId(player);
+        foreach (var objectId in RepeatingFrozenStateObjectIds(player, maxRecords))
+        {
+            if (offset + Ps3SourcePlayerStateLinkRecord.Length > body.Length)
+            {
+                break;
+            }
+
+            WritePlayerStateLink(body.AsSpan(offset, Ps3SourcePlayerStateLinkRecord.Length), objectId, linkedObjectId);
+            offset += Ps3SourcePlayerStateLinkRecord.Length;
+        }
+
+        WriteQueuedBoundaryBytes(body.AsSpan(offset), game, player, state, (byte)(streamKind ^ 0x80), family + ":tail");
+        return body;
+    }
+
+    private static byte[] BuildEmbeddedPlayerObjectBoundaryBody(
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        int length,
+        int prefixLength,
+        int maxRecords,
+        byte streamKind,
+        string family)
+    {
+        var body = new byte[length];
+        var offset = Math.Min(prefixLength, body.Length);
+        WriteQueuedBoundaryBytes(body.AsSpan(0, offset), game, player, state, streamKind, family);
+
+        foreach (var record in BuildPlayerObjectRecords(game, player).Take(maxRecords))
+        {
+            if (offset + Ps3SourceEmbeddedObjectWireRecord.PlayerObjectLength > body.Length)
+            {
+                break;
+            }
+
+            WritePlayerObject(
+                body.AsSpan(offset, Ps3SourceEmbeddedObjectWireRecord.PlayerObjectLength),
+                record.ObjectId,
+                record.ParentId,
+                record.Name);
+            offset += Ps3SourceEmbeddedObjectWireRecord.PlayerObjectLength;
+        }
+
+        WriteQueuedBoundaryBytes(body.AsSpan(offset), game, player, state, (byte)(streamKind ^ 0x80), family + ":tail");
+        return body;
+    }
+
+    private static void WriteQueuedBoundaryBytes(
+        Span<byte> destination,
+        GameManagerSession game,
+        PlayerSession player,
+        Ps3NativeSourceResponderState state,
+        byte streamKind,
+        string family)
+    {
+        if (destination.Length == 0)
+        {
+            return;
+        }
+
+        var seed = StableSourceDigest32(
+            $"{family}:{streamKind:x2}:{game.GameId}:{game.ServerUid}:{player.PlayerId}:{player.Name}:{state.ClientPacketCount}:{state.NextServerSequence}:{player.SourceState.LastClientSourceSequence}");
+        var baseOffset = ChooseLowPrintablePermutationOffset(destination.Length, seed, streamKind);
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var blockOffset = unchecked(baseOffset + (int)((seed >> ((i >> 8) % 4 * 8)) & 0xff) + ((i >> 8) * 73));
+            destination[i] = (byte)(((i & 0xff) * 149 + blockOffset) & 0xff);
+        }
+    }
+
+    private static int ChooseLowPrintablePermutationOffset(int length, uint seed, byte streamKind)
+    {
+        if (length <= 0)
+        {
+            return 0;
+        }
+
+        var preferred = (int)((seed ^ streamKind) & 0xff);
+        var bestOffset = preferred;
+        var bestPrintable = int.MaxValue;
+        for (var candidate = 0; candidate < 256; candidate++)
+        {
+            var offset = (preferred + candidate) & 0xff;
+            var printable = 0;
+            for (var i = 0; i < length; i++)
+            {
+                var value = (byte)(((i & 0xff) * 149 + offset) & 0xff);
+                if (value is >= 0x20 and <= 0x7e)
+                {
+                    printable++;
+                }
+            }
+
+            if (printable >= bestPrintable)
+            {
+                continue;
+            }
+
+            bestPrintable = printable;
+            bestOffset = offset;
+            if (printable * 100 < length * 30)
+            {
+                break;
+            }
+        }
+
+        return bestOffset;
     }
 
     private static byte[] BuildLateLargeCommandPreambleBody(
@@ -3849,10 +5087,10 @@ public sealed class Ps3NativeSourceResponder
             records.Add((
                 PlayerSourceObjectId(candidate),
                 rootObjectId,
-                string.IsNullOrWhiteSpace(candidate.Name) ? $"player{candidate.PlayerId}" : candidate.Name));
+                SourceDisplayName(candidate)));
         }
 
-        records.Add((rootObjectId, PlayerSourceObjectId(recipient), string.IsNullOrWhiteSpace(recipient.Name) ? "Host" : recipient.Name));
+        records.Add((rootObjectId, PlayerSourceObjectId(recipient), SourceDisplayName(recipient)));
         return records.ToArray();
     }
 
@@ -4107,7 +5345,7 @@ public sealed class Ps3NativeSourceResponder
             RatingDelta: 0,
             Connected: true,
             ObjectId: PlayerSourceObjectId(player),
-            StatusText: $"{(string.IsNullOrWhiteSpace(player.Name) ? "Player" : player.Name)} joined {game.MapName}",
+            StatusText: $"{(string.IsNullOrWhiteSpace(player.Name) ? "Player" : player.Name)} connected to {game.MapName}",
             Score: sourceState.Score,
             Deaths: sourceState.Deaths,
             Team: sourceState.TeamNumber,
@@ -4998,14 +6236,13 @@ public sealed class Ps3NativeSourceResponder
 
     private static bool IsNativeEntityDeltaSection(byte[] section)
     {
-        return Ps3SourceEntityDeltaFrameBuilder.TryDecodeNativeRecords(section, out var records, out var consumedBits)
+        return Ps3SourceEntityDeltaFrameBuilder.TryDecodeNativeRecord(section, out var record, out var consumedBits)
             && consumedBits > 0
             && consumedBits <= section.Length * 8
-            && records.All(static record =>
-                record.IsPartialRun
-                && record.ObjectId.HasValue
-                && !string.IsNullOrWhiteSpace(record.ObjectName)
-                && record.ObjectName[0] == 'C');
+            && record.IsPartialRun
+            && record.ObjectId.HasValue
+            && !string.IsNullOrWhiteSpace(record.ObjectName)
+            && record.ObjectName[0] == 'C';
     }
 
     private static byte[] BuildSnapshotRagdollDelta(GameManagerSession game, PlayerSession player)
@@ -5104,19 +6341,6 @@ public sealed class Ps3NativeSourceResponder
                 PlayerState: sourceState.PlayerState));
     }
 
-    private static byte[] PadNativeWrappedPayload(byte[] payload, int targetLength, uint seed)
-    {
-        if (payload.Length == targetLength)
-        {
-            return payload;
-        }
-
-        var body = new byte[targetLength];
-        payload.CopyTo(body.AsSpan());
-        FillHighEntropyDeterministic(body.AsSpan(payload.Length), seed ^ 0xa4f0c91du);
-        return body;
-    }
-
     private static byte[] BuildSnapshotFrameBody(GameManagerSession game, PlayerSession player)
     {
         var state = player.NativeSourceResponder;
@@ -5136,7 +6360,7 @@ public sealed class Ps3NativeSourceResponder
             RatingDelta: 0,
             Connected: true,
             ObjectId: playerObjectId,
-            StatusText: $"{(string.IsNullOrWhiteSpace(player.Name) ? "Player" : player.Name)} joined {game.MapName}",
+            StatusText: $"{(string.IsNullOrWhiteSpace(player.Name) ? "Player" : player.Name)} connected to {game.MapName}",
             Score: sourceState.Score,
             Deaths: sourceState.Deaths,
             Team: sourceState.TeamNumber,
@@ -5646,6 +6870,15 @@ public sealed class Ps3NativeSourceResponder
         return ids;
     }
 
+    private static IEnumerable<uint> RepeatingFrozenStateObjectIds(PlayerSession player, int count)
+    {
+        var ids = FrozenStateObjectIds(player);
+        for (var index = 0; index < count; index++)
+        {
+            yield return ids[index % ids.Length];
+        }
+    }
+
     private static uint FrozenStateObjectId(PlayerSession player, int index)
     {
         var ids = FrozenStateObjectIds(player);
@@ -5762,6 +6995,45 @@ public sealed class Ps3NativeSourceResponder
         return Encoding.ASCII.GetBytes(value);
     }
 
+    private static Ps3SourceNetMessageFrame[] BuildBootstrapPrecacheStringTableFrames(string mapName)
+    {
+        return Tf2Ps3SourceCatalog.BuildBootstrapPrecacheStringTables(mapName)
+            .Select(table =>
+            {
+                var payload = BuildStringTableData(table.MaxEntries, table.Entries);
+                return Ps3SourceNetMessages.BuildCreateStringTableFrame(new Ps3SourceSvcStringTable(
+                    TableName: table.TableName,
+                    MaxEntries: table.MaxEntries,
+                    NumEntries: table.Entries.Count,
+                    UserDataFixedSize: false,
+                    UserDataSize: 0,
+                    UserDataSizeBits: 0,
+                    Data: payload.Payload,
+                    DataBitCount: payload.BitCount));
+            })
+            .ToArray();
+    }
+
+    private static Ps3SourceNetMessageFrame BuildUserInfoStringTableData(string playerName)
+    {
+        return BuildStringTableData(2048, [playerName]);
+    }
+
+    private static Ps3SourceNetMessageFrame BuildStringTableData(
+        ushort maxEntries,
+        IReadOnlyList<string> values)
+    {
+        return Ps3SourceNetMessages.BuildStringTableUpdateDataFrame(
+            maxEntries: maxEntries,
+            entries: values
+                .Select((value, index) => new Ps3SourceStringTableEntry(
+                    Index: index,
+                    Value: value,
+                    UserData: [],
+                    UserDataBitCount: 0))
+                .ToArray());
+    }
+
     private static void WriteAscii(Span<byte> destination, int offset, string value)
     {
         Encoding.ASCII.GetBytes(value, destination[offset..]);
@@ -5771,6 +7043,13 @@ public sealed class Ps3NativeSourceResponder
     {
         var bytes = Encoding.ASCII.GetBytes(value);
         bytes.AsSpan(0, Math.Min(bytes.Length, destination.Length)).CopyTo(destination);
+    }
+
+    private static void WriteBoundedAscii(Span<byte> destination, string value)
+    {
+        destination.Clear();
+        var bytes = Encoding.ASCII.GetBytes(value);
+        bytes.AsSpan(0, Math.Min(bytes.Length, Math.Max(0, destination.Length - 1))).CopyTo(destination);
     }
 
     private static void WriteUInt32BigEndian(Span<byte> destination, uint value)
@@ -5789,58 +7068,6 @@ public sealed class Ps3NativeSourceResponder
             value = unchecked(value * 1103515245u + 12345u + (uint)i);
             destination[i] = (byte)(value >> 16);
         }
-    }
-
-    private static void FillHighEntropyDeterministic(Span<byte> destination, uint seed)
-    {
-        Span<byte> input = stackalloc byte[8];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(input, seed == 0 ? 0x6d2b79f5u : seed);
-        var offset = 0;
-        var counter = 0u;
-        while (offset < destination.Length)
-        {
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(input[4..], counter++);
-            var block = System.Security.Cryptography.SHA256.HashData(input);
-            var count = Math.Min(block.Length, destination.Length - offset);
-            block.AsSpan(0, count).CopyTo(destination[offset..]);
-            offset += count;
-        }
-    }
-
-    private static byte[] PadNativeBitstream(
-        byte[] bitstream,
-        int length,
-        byte seed,
-        GameManagerSession game,
-        PlayerSession player,
-        bool highEntropyPadding = false)
-    {
-        if (bitstream.Length >= length)
-        {
-            return bitstream;
-        }
-
-        var body = new byte[length];
-        bitstream.AsSpan(0, Math.Min(bitstream.Length, body.Length)).CopyTo(body);
-        if (bitstream.Length < body.Length)
-        {
-            var fillSeed = (byte)(seed ^ (byte)game.GameId ^ (byte)player.PlayerId);
-            if (highEntropyPadding)
-            {
-                FillHighEntropyDeterministic(
-                    body.AsSpan(bitstream.Length),
-                    ((uint)fillSeed << 24)
-                    ^ ((uint)game.GameId << 8)
-                    ^ (uint)player.PlayerId
-                    ^ (uint)bitstream.Length);
-            }
-            else
-            {
-                FillDeterministic(body.AsSpan(bitstream.Length), fillSeed, protectedPrefixBytes: 0);
-            }
-        }
-
-        return body;
     }
 
     private static bool HasEmbeddedObjectState(ReadOnlySpan<byte> body)
@@ -5863,9 +7090,9 @@ public sealed class Ps3NativeSourceResponder
 
     private enum LoadingContinuationFrameKind
     {
-        HighEntropy,
+        NativeSnapshot,
         PlayerStateLink,
-        MixedBinary
+        NativeQueuedBoundary
     }
 
     private readonly record struct LoadingContinuationFrame(

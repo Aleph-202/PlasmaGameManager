@@ -59,12 +59,27 @@ public sealed class LiveHandoffEvidenceAnalyzer
                 Array.Empty<LiveSourceEmbeddedValueCount>(),
                 Array.Empty<LiveSourceEmbeddedValueCount>(),
                 Array.Empty<LiveSourceEmbeddedValueCount>(),
-                Array.Empty<LiveSourceEmbeddedValueCount>());
+                Array.Empty<LiveSourceEmbeddedValueCount>(),
+                false,
+                0,
+                false,
+                0,
+                false,
+                0,
+                0,
+                0,
+                "",
+                Array.Empty<LiveSourcePhaseCount>());
         }
 
         var eventCount = 0;
         var handoffCount = 0;
         var sourceTrafficCount = 0;
+        var generatedNativeSourceCount = 0;
+        var generatedTerminalBootstrapCount = 0;
+        var generatedSteadyGameplayCount = 0;
+        var maxGeneratedSourcePayloadLength = 0;
+        var oversizedGeneratedSourcePayloadCount = 0;
         var firstEndpoint = "";
         var firstKind = "";
         var firstTimestamp = "";
@@ -73,6 +88,7 @@ public sealed class LiveHandoffEvidenceAnalyzer
         var embeddedObjectLinks = new List<string>();
         var embeddedDisplayNames = new List<string>();
         var embeddedClassIds = new List<string>();
+        var generatedSourcePhases = new List<string>();
         foreach (var line in File.ReadLines(path))
         {
             if (string.IsNullOrWhiteSpace(line))
@@ -85,7 +101,7 @@ public sealed class LiveHandoffEvidenceAnalyzer
             var root = doc.RootElement;
             var eventName = ReadString(root, "Event");
             var stateAfter = ReadString(root, "StateAfter");
-            if (eventName is "source-traffic" or "source-send" or "source-proxy-forward" or "source-proxy-send")
+            if (IsSourceEvent(eventName))
             {
                 sourceTrafficCount++;
                 AddStringProperty(sourceSemanticRoles, root, "SourcePayloadSemanticRole");
@@ -93,6 +109,35 @@ public sealed class LiveHandoffEvidenceAnalyzer
                 AddStringArrayProperty(embeddedObjectLinks, root, "SourceEmbeddedObjectLinks");
                 AddStringArrayProperty(embeddedDisplayNames, root, "SourceEmbeddedDisplayNames");
                 AddStringArrayProperty(embeddedClassIds, root, "SourceEmbeddedClassIds");
+
+                if (IsGeneratedNativeSourceEvent(root, eventName))
+                {
+                    generatedNativeSourceCount++;
+                    var payloadLength = ReadInt(root, "PayloadLength");
+                    maxGeneratedSourcePayloadLength = Math.Max(maxGeneratedSourcePayloadLength, payloadLength);
+                    if (payloadLength > 1002)
+                    {
+                        oversizedGeneratedSourcePayloadCount++;
+                    }
+
+                    var phase = ClassifyGeneratedSourcePhase(root);
+                    if (phase.Length > 0)
+                    {
+                        generatedSourcePhases.Add(phase);
+                    }
+
+                    if (phase == "inferred-gameplay-steady-traffic")
+                    {
+                        generatedSteadyGameplayCount++;
+                    }
+
+                    if (ReadString(root, "Explanation").Contains(
+                            "terminal map-load object-stream bootstrap",
+                            StringComparison.Ordinal))
+                    {
+                        generatedTerminalBootstrapCount++;
+                    }
+                }
             }
 
             if (eventName != "source-handoff" || stateAfter != "SourceHandoff")
@@ -124,7 +169,64 @@ public sealed class LiveHandoffEvidenceAnalyzer
             TopEmbeddedValueCounts(embeddedRecordRoles),
             TopEmbeddedValueCounts(embeddedObjectLinks),
             TopEmbeddedValueCounts(embeddedDisplayNames),
-            TopEmbeddedValueCounts(embeddedClassIds));
+            TopEmbeddedValueCounts(embeddedClassIds),
+            generatedNativeSourceCount > 0,
+            generatedNativeSourceCount,
+            generatedTerminalBootstrapCount > 0,
+            generatedTerminalBootstrapCount,
+            generatedSteadyGameplayCount > 0,
+            generatedSteadyGameplayCount,
+            maxGeneratedSourcePayloadLength,
+            oversizedGeneratedSourcePayloadCount,
+            generatedSourcePhases
+                .OrderByDescending(PhaseRank)
+                .FirstOrDefault() ?? "",
+            TopPhaseCounts(generatedSourcePhases));
+    }
+
+    private static bool IsSourceEvent(string eventName)
+    {
+        return eventName is "source-traffic"
+            or "source-send"
+            or "source-generated-send"
+            or "source-proxy-forward"
+            or "source-proxy-send";
+    }
+
+    private static bool IsGeneratedNativeSourceEvent(JsonElement root, string eventName)
+    {
+        if (eventName != "source-generated-send")
+        {
+            return false;
+        }
+
+        var kind = ReadString(root, "Kind");
+        var explanation = ReadString(root, "Explanation");
+        return kind.Contains("GeneratedPs3Source", StringComparison.Ordinal)
+            || explanation.Contains("generated PS3 Source native", StringComparison.Ordinal);
+    }
+
+    private static string ClassifyGeneratedSourcePhase(JsonElement root)
+    {
+        var explanation = ReadString(root, "Explanation");
+        var role = ReadString(root, "SourcePayloadSemanticRole");
+        if (explanation.Contains("steady", StringComparison.OrdinalIgnoreCase)
+            || role.Contains("Steady", StringComparison.OrdinalIgnoreCase))
+        {
+            return "inferred-gameplay-steady-traffic";
+        }
+
+        if (explanation.Contains("terminal map-load", StringComparison.OrdinalIgnoreCase)
+            || explanation.Contains("post-terminal", StringComparison.OrdinalIgnoreCase)
+            || explanation.Contains("loading", StringComparison.OrdinalIgnoreCase)
+            || explanation.Contains("MOTD", StringComparison.OrdinalIgnoreCase)
+            || role.Contains("Bootstrap", StringComparison.OrdinalIgnoreCase)
+            || role.Contains("Loading", StringComparison.OrdinalIgnoreCase))
+        {
+            return "inferred-loading-or-motd-transfer";
+        }
+
+        return "inferred-source-handoff-setup";
     }
 
     private LiveSourceEvidence AnalyzeSourceEvidence(string path)
@@ -342,6 +444,13 @@ public sealed class LiveHandoffEvidenceAnalyzer
         return element.TryGetProperty(property, out var value) ? value.ToString() : "";
     }
 
+    private static int ReadInt(JsonElement element, string property)
+    {
+        return element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number
+            ? value.GetInt32()
+            : 0;
+    }
+
     private static string[] ReadStringArray(JsonElement element, string property)
     {
         if (!element.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array)
@@ -403,6 +512,17 @@ public sealed class LiveHandoffEvidenceAnalyzer
             .ToArray();
     }
 
+    private static LiveSourcePhaseCount[] TopPhaseCounts(IEnumerable<string> values)
+    {
+        return values
+            .GroupBy(static value => value, StringComparer.Ordinal)
+            .OrderByDescending(static group => PhaseRank(group.Key))
+            .ThenByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => new LiveSourcePhaseCount(group.Key, group.Count()))
+            .ToArray();
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
@@ -433,7 +553,17 @@ public sealed record LiveGameManagerEventEvidence(
     LiveSourceEmbeddedValueCount[] SourceEmbeddedRecordRoleCounts,
     LiveSourceEmbeddedValueCount[] SourceEmbeddedObjectLinkCounts,
     LiveSourceEmbeddedValueCount[] SourceEmbeddedDisplayNameCounts,
-    LiveSourceEmbeddedValueCount[] SourceEmbeddedClassIdCounts);
+    LiveSourceEmbeddedValueCount[] SourceEmbeddedClassIdCounts,
+    bool HasGeneratedNativeSourceEvent,
+    int GeneratedNativeSourceEventCount,
+    bool HasGeneratedTerminalObjectStreamBootstrap,
+    int GeneratedTerminalObjectStreamBootstrapCount,
+    bool HasGeneratedSteadyGameplayEvent,
+    int GeneratedSteadyGameplayEventCount,
+    int MaxGeneratedSourcePayloadLength,
+    int OversizedGeneratedSourcePayloadCount,
+    string HighestGeneratedSourceSessionPhase,
+    LiveSourcePhaseCount[] GeneratedSourceSessionPhaseCounts);
 
 public sealed record LiveSourceEvidence(
     string Path,

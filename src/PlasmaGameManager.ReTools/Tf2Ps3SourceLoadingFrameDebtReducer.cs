@@ -19,13 +19,15 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
     {
         var source = await File.ReadAllTextAsync(responderSourcePath);
         var lines = SplitLines(source);
+        var hasNativeSnapshotPadding = source.Contains("PadNativeWrappedPayload(", StringComparison.Ordinal);
+        var hasNativeQueuedLoadingStateLink = source.Contains("BuildNativeQueuedLoadingPlayerStateLinkBody(", StringComparison.Ordinal);
         var collections = ParseFrameCollections(source, lines)
             .OrderBy(static collection => collection.SortKey)
             .ThenBy(static collection => collection.Name, StringComparer.Ordinal)
             .ToArray();
         var frames = collections
             .SelectMany(static collection => collection.Frames)
-            .Select(ClassifyFrame)
+            .Select(frame => ClassifyFrame(frame, hasNativeSnapshotPadding, hasNativeQueuedLoadingStateLink))
             .OrderBy(static frame => frame.CollectionSortKey)
             .ThenBy(static frame => frame.StageIndex)
             .ThenBy(static frame => frame.FrameIndex)
@@ -44,13 +46,16 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
                 group.Key.Phase,
                 group.Select(static frame => frame.StageIndex).Distinct().Count(),
                 group.Count(),
-                group.Count(static frame => frame.Kind == "HighEntropy"),
-                group.Count(static frame => frame.Kind == "MixedBinary"),
+                group.Count(static frame => frame.Kind is "HighEntropy" or "NativeSnapshot"),
+                group.Count(static frame => frame.Kind is "MixedBinary" or "NativeQueuedBoundary"),
                 group.Count(static frame => frame.Kind == "PlayerStateLink"),
                 group.Count(static frame => frame.Risk == "production-fake-generated-filler"),
                 group.Count(static frame => frame.Risk == "native-records-with-generated-prefix-or-padding"),
                 group.Count(static frame => frame.Risk == "steady-native-snapshot-with-deterministic-padding-risk"),
-                group.Sum(static frame => frame.BlockingByteCount)))
+                group.Sum(static frame => frame.BlockingByteCount),
+                group.Sum(static frame => frame.NativeRecordPrefixDebtBytes),
+                group.Sum(static frame => frame.NativeRecordTrailingDebtBytes),
+                group.Sum(static frame => frame.NativeRecordByteCount)))
             .OrderBy(static summary => CollectionSortKey(summary.Collection))
             .ThenBy(static summary => summary.Collection, StringComparer.Ordinal)
             .ToArray();
@@ -75,13 +80,16 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
                 frames.Length,
                 frames.Count(static frame => frame.Phase != "steady-state-delta"),
                 frames.Count(static frame => frame.Phase == "steady-state-delta"),
-                frames.Count(static frame => frame.Kind == "HighEntropy"),
-                frames.Count(static frame => frame.Kind == "MixedBinary"),
+                frames.Count(static frame => frame.Kind is "HighEntropy" or "NativeSnapshot"),
+                frames.Count(static frame => frame.Kind is "MixedBinary" or "NativeQueuedBoundary"),
                 frames.Count(static frame => frame.Kind == "PlayerStateLink"),
                 frames.Count(static frame => frame.Risk == "production-fake-generated-filler"),
                 frames.Count(static frame => frame.Risk == "native-records-with-generated-prefix-or-padding"),
                 frames.Count(static frame => frame.Risk == "steady-native-snapshot-with-deterministic-padding-risk"),
                 frames.Sum(static frame => frame.BlockingByteCount),
+                frames.Sum(static frame => frame.NativeRecordPrefixDebtBytes),
+                frames.Sum(static frame => frame.NativeRecordTrailingDebtBytes),
+                frames.Sum(static frame => frame.NativeRecordByteCount),
                 directGeneratorCallSites.Length,
                 nativeDebtSummary.GetProperty("StaticHexTemplateCount").GetInt32(),
                 nativeDebtSummary.GetProperty("HighEntropyLoadingFrameCount").GetInt32(),
@@ -103,50 +111,115 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
                 .ThenBy(static frame => frame.FrameIndex)
                 .Take(80)
                 .ToArray(),
+            BuildNativeRecordPrefixDebtFamilies(frames),
             directGeneratorCallSites,
-            [
-                "Early loading HighEntropy and MixedBinary frames are still generated filler. They must be replaced with TF.elf queued Source control/submessage writers or snapshot/entity-delta writers before this responder is native.",
-                "PlayerStateLink frames contain native PNG records, but their deterministic prefix/trailing bytes are still queued-prefix debt unless BlockingByteCount is zero.",
-                "Steady-state frames routed through TryBuildSteadyNativeSnapshotBody are not fully proven native while PadNativeWrappedPayload can append deterministic high-entropy bytes to reach pcap-shaped lengths.",
-                "EA Tunnel remains a closed lead for client-visible packet ownership in current evidence: server.dll has no executable xrefs from the EA Tunnel string or descriptor neighborhood. Continue treating TF.elf's 008bc978 -> 008b9f70/008bb058/008bc490 path as authoritative unless new xrefs appear.",
-                "The native completion gate for loading/map-load packets is ProductionFakeFrameCount == 0, NativeRecordWithGeneratedPrefixFrameCount == 0, GeneratedQueuedPrefixDebtBytes == 0, SteadyNativeSnapshotPaddingRiskCount == 0, plus StaticHexTemplateCount == 0 in source-native-template-debt."
-            ]);
+            BuildConclusions(hasNativeSnapshotPadding));
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, JsonOptions));
         return report;
     }
 
-    private static Tf2Ps3SourceLoadingFrameFrame ClassifyFrame(Tf2Ps3SourceLoadingFrameRawFrame frame)
+    private static string[] BuildConclusions(bool hasNativeSnapshotPadding)
+    {
+        return
+        [
+                "NativeSnapshot loading frames route through TryBuildNativeSnapshotBody and are no longer counted as production fake filler. Legacy HighEntropy frame names remain a hard debt signal if reintroduced.",
+                "NativeQueuedBoundary loading frames route through compact control or queued boundary writers. PlayerStateLink frames contain native PNG records; any remaining prefix/trailing bytes are tracked separately as native record stream debt.",
+                hasNativeSnapshotPadding
+                    ? "Steady-state frames routed through TryBuildSteadyNativeSnapshotBody are not fully proven native while PadNativeWrappedPayload can append deterministic high-entropy bytes to reach pcap-shaped lengths."
+                    : "Steady-state frames routed through TryBuildSteadyNativeSnapshotBody no longer append deterministic padding; remaining loading debt is limited to explicit legacy fake frame names, generated queued-prefix debt, and static templates.",
+                "EA Tunnel remains a closed lead for client-visible packet ownership in current evidence: server.dll has no executable xrefs from the EA Tunnel string or descriptor neighborhood. Continue treating TF.elf's 008bc978 -> 008b9f70/008bb058/008bc490 path as authoritative unless new xrefs appear.",
+                "The native completion gate for loading/map-load packets is ProductionFakeFrameCount == 0, NativeRecordWithGeneratedPrefixFrameCount == 0, NativeRecordPrefixDebtBytes == 0, NativeRecordTrailingDebtBytes == 0, GeneratedQueuedPrefixDebtBytes == 0, SteadyNativeSnapshotPaddingRiskCount == 0, plus StaticHexTemplateCount == 0 in source-native-template-debt."
+        ];
+    }
+
+    private static Tf2Ps3SourceNativeRecordPrefixDebtFamily[] BuildNativeRecordPrefixDebtFamilies(
+        IReadOnlyCollection<Tf2Ps3SourceLoadingFrameFrame> frames)
+    {
+        return frames
+            .Where(static frame => frame.Risk == "native-records-with-generated-prefix-or-padding")
+            .GroupBy(static frame => new
+            {
+                frame.Phase,
+                frame.Variant,
+                PrefixLength = frame.PrefixLength ?? 0,
+                MaxRecords = frame.MaxRecords ?? 0,
+                frame.Length
+            })
+            .Select(static group =>
+            {
+                var first = group
+                    .OrderBy(static frame => frame.CollectionSortKey)
+                    .ThenBy(static frame => frame.StageIndex)
+                    .ThenBy(static frame => frame.FrameIndex)
+                    .First();
+                return new Tf2Ps3SourceNativeRecordPrefixDebtFamily(
+                    Family: $"{group.Key.Phase}:v{group.Key.Variant}:len{group.Key.Length}:prefix{group.Key.PrefixLength}:records{group.Key.MaxRecords}",
+                    Phase: group.Key.Phase,
+                    Variant: group.Key.Variant,
+                    Length: group.Key.Length,
+                    PrefixLength: group.Key.PrefixLength,
+                    MaxRecords: group.Key.MaxRecords,
+                    FrameCount: group.Count(),
+                    BlockingByteCount: group.Sum(static frame => frame.BlockingByteCount),
+                    PrefixDebtBytes: group.Sum(static frame => frame.NativeRecordPrefixDebtBytes),
+                    TrailingDebtBytes: group.Sum(static frame => frame.NativeRecordTrailingDebtBytes),
+                    NativeRecordByteCount: group.Sum(static frame => frame.NativeRecordByteCount),
+                    DominantDebtKind: group.Sum(static frame => frame.NativeRecordTrailingDebtBytes) >= group.Sum(static frame => frame.NativeRecordPrefixDebtBytes)
+                        ? "trailing-native-source-body"
+                        : "prefix-native-source-control",
+                    PriorityScore: group.Sum(static frame => frame.PriorityScore),
+                    FirstCollection: first.Collection,
+                    FirstStageIndex: first.StageIndex,
+                    FirstFrameIndex: first.FrameIndex,
+                    LineNumber: first.LineNumber,
+                    RequiredNativeWriter: "TF.elf queued peer-channel Source bitstream writer around native PNG state-link records");
+            })
+            .OrderByDescending(static family => family.BlockingByteCount)
+            .ThenByDescending(static family => family.FrameCount)
+            .ThenBy(static family => family.Family, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static Tf2Ps3SourceLoadingFrameFrame ClassifyFrame(
+        Tf2Ps3SourceLoadingFrameRawFrame frame,
+        bool hasNativeSnapshotPadding,
+        bool hasNativeQueuedLoadingStateLink)
     {
         var steadyCandidate = frame.SeedStageIndex >= 200 && frame.Length >= 48;
-        var forcedPlayerHighEntropy = frame.Kind == "PlayerStateLink"
-            && ShouldBuildPlayerStateLinkAsHighEntropy(frame.Variant, frame.Length, frame.SeedStageIndex);
+        var forcedPlayerNativeSnapshot = frame.Kind == "PlayerStateLink"
+            && ShouldBuildPlayerStateLinkAsNativeSnapshot(frame.Variant, frame.Length, frame.SeedStageIndex);
+        var forcedPlayerCompactControl = frame.Kind == "PlayerStateLink" && frame.Length < 48;
 
         if (steadyCandidate)
         {
             return BuildClassifiedFrame(
                 frame,
-                "TryBuildSteadyNativeSnapshotBody -> Ps3SourceSnapshotFrame -> PadNativeWrappedPayload",
-                "steady-native-snapshot-with-deterministic-padding-risk",
+                hasNativeSnapshotPadding
+                    ? "TryBuildSteadyNativeSnapshotBody -> Ps3SourceSnapshotFrame -> PadNativeWrappedPayload"
+                    : "TryBuildSteadyNativeSnapshotBody -> Ps3SourceSnapshotFrame",
+                hasNativeSnapshotPadding
+                    ? "steady-native-snapshot-with-deterministic-padding-risk"
+                    : "native-snapshot-no-padding-detected",
                 "native-snapshot-and-entity-delta-route",
-                frame.Length,
-                (frame.Length * 4) + 500,
-                "Recover the exact queued snapshot/entity-delta body length or remove PadNativeWrappedPayload so native snapshots are not length-shaped with deterministic filler.");
+                hasNativeSnapshotPadding ? frame.Length : 0,
+                hasNativeSnapshotPadding ? (frame.Length * 4) + 500 : 0,
+                hasNativeSnapshotPadding
+                    ? "Recover the exact queued snapshot/entity-delta body length or remove PadNativeWrappedPayload so native snapshots are not length-shaped with deterministic filler."
+                    : "Padding has been removed from the steady snapshot route; keep this path on native snapshot/entity-delta writers.");
         }
 
-        if (frame.Kind == "HighEntropy" || forcedPlayerHighEntropy)
+        if (frame.Kind == "HighEntropy")
         {
             return BuildClassifiedFrame(
                 frame,
-                "BuildHighEntropyBinaryBody -> FillHighEntropyDeterministic",
+                "TryBuildNativeSnapshotBody -> Ps3SourceSnapshotFrame with BuildHighEntropyBinaryBody fallback",
                 "production-fake-generated-filler",
                 "native-snapshot-and-entity-delta-route",
                 frame.Length,
-                (frame.Length * 4) + (forcedPlayerHighEntropy ? 250 : 300),
-                forcedPlayerHighEntropy
-                    ? "This PlayerStateLink-shaped slot is deliberately forced into high-entropy filler for this variant/phase. Recover the real TF.elf writer before sending it in production."
-                    : "Replace this high-entropy filler with named Source snapshot/entity-delta or object-stream fields from TF.elf/server.dll semantics.");
+                (frame.Length * 4) + 300,
+                "This legacy high-entropy slot would be production fake debt. Rename it only after it is routed through a native writer.");
         }
 
         if (frame.Kind == "MixedBinary")
@@ -158,14 +231,48 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
                 "queued-peer-submessage-boundaries",
                 frame.Length,
                 (frame.Length * 3) + 220,
-                "Replace this printable deterministic filler with named queued-peer control/submessage fields around COc/DSC/PNG records.");
+                "Replace this legacy mixed-binary filler with named queued-peer control/submessage fields around COc/DSC/PNG records.");
+        }
+
+        if (frame.Kind == "NativeSnapshot" || forcedPlayerNativeSnapshot)
+        {
+            return BuildClassifiedFrame(
+                frame,
+                "TryBuildNativeSnapshotBody -> Ps3SourceSnapshotFrame",
+                "native-snapshot-no-padding-detected",
+                "native-snapshot-and-entity-delta-route",
+                0,
+                0,
+                forcedPlayerNativeSnapshot
+                    ? "This PlayerStateLink-shaped slot is intentionally handled by the native snapshot/entity-delta writer for this variant/phase."
+                    : "This loading slot is routed through native Source snapshot/entity-delta generation.");
+        }
+
+        if (frame.Kind == "NativeQueuedBoundary" || forcedPlayerCompactControl)
+        {
+            return BuildClassifiedFrame(
+                frame,
+                forcedPlayerCompactControl
+                    ? "BuildPlayerStateLinkSlotReplacementBody -> compact control/short ack"
+                    : "TryBuildCompactLoadingControlBody/TryBuildEmbeddedLoadingBoundaryBody/BuildQueuedBoundaryOnlyBody",
+                "native-queued-boundary-no-prefix-debt-detected",
+                "queued-peer-submessage-boundaries",
+                0,
+                0,
+                forcedPlayerCompactControl
+                    ? "This PlayerStateLink-shaped slot is intentionally handled as a compact control pulse because it is too small for the native snapshot/entity-delta writer."
+                    : "This loading slot is routed through named compact-control or queued-boundary generation.");
         }
 
         var nativeRecordBytes = NativePlayerStateLinkBytes(frame);
-        var blockingBytes = Math.Max(0, frame.Length - nativeRecordBytes);
+        var prefixDebtBytes = NativePlayerStateLinkPrefixDebtBytes(frame);
+        var trailingDebtBytes = NativePlayerStateLinkTrailingDebtBytes(frame, nativeRecordBytes);
+        var blockingBytes = prefixDebtBytes + trailingDebtBytes;
         return BuildClassifiedFrame(
             frame,
-            "BuildPlayerStateLinkBody -> Ps3SourcePlayerStateLinkRecord.BuildBatch",
+            hasNativeQueuedLoadingStateLink
+                ? "BuildNativeQueuedLoadingPlayerStateLinkBody -> BuildNativeQueuedPlayerStateLinkBody -> WriteQueuedBoundaryBytes + Ps3SourcePlayerStateLinkRecord.BuildBatch"
+                : "BuildPlayerStateLinkBody -> Ps3SourcePlayerStateLinkRecord.BuildBatch",
             blockingBytes == 0
                 ? "native-records-no-prefix-debt-detected"
                 : "native-records-with-generated-prefix-or-padding",
@@ -174,7 +281,12 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
             (blockingBytes * 2) + Math.Min(nativeRecordBytes, 96),
             blockingBytes == 0
                 ? "The visible frame body can be fully accounted for as native PNG records; keep it on Ps3SourcePlayerStateLinkRecord."
-                : "The PNG tail records are native, but the prefix/trailing deterministic bytes still need the TF.elf queued-prefix/control writer.");
+                : hasNativeQueuedLoadingStateLink
+                    ? "The PNG records are native and the frame now routes through the provisional queued stream writer, but WriteQueuedBoundaryBytes still stands in for exact TF.elf/server.dll prefix and trailing Source bitstream fields."
+                    : "The PNG records are native, but the prefix/trailing deterministic bytes still need the TF.elf queued Source bitstream writer.",
+            nativeRecordBytes,
+            prefixDebtBytes,
+            trailingDebtBytes);
     }
 
     private static Tf2Ps3SourceLoadingFrameFrame BuildClassifiedFrame(
@@ -184,7 +296,10 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
         string replacementTarget,
         int blockingBytes,
         int priorityScore,
-        string recommendedNextAction)
+        string recommendedNextAction,
+        int nativeRecordBytes = 0,
+        int nativeRecordPrefixDebtBytes = 0,
+        int nativeRecordTrailingDebtBytes = 0)
     {
         return new Tf2Ps3SourceLoadingFrameFrame(
             frame.Collection,
@@ -204,6 +319,9 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
             risk,
             replacementTarget,
             blockingBytes,
+            nativeRecordPrefixDebtBytes,
+            nativeRecordTrailingDebtBytes,
+            nativeRecordBytes,
             priorityScore,
             frame.LineNumber,
             recommendedNextAction);
@@ -211,14 +329,37 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
 
     private static int NativePlayerStateLinkBytes(Tf2Ps3SourceLoadingFrameRawFrame frame)
     {
-        var offset = Math.Min(frame.PrefixLength.GetValueOrDefault(), frame.Length);
+        var offset = NativePlayerStateLinkPrefixDebtBytes(frame);
         var availableRecordCount = Math.Max(0, (frame.Length - offset) / 12);
         var recordCount = Math.Min(frame.MaxRecords.GetValueOrDefault(int.MaxValue), availableRecordCount);
         return recordCount * 12;
     }
 
-    private static bool ShouldBuildPlayerStateLinkAsHighEntropy(int initialSetupVariant, int length, int seedStageIndex)
+    private static int NativePlayerStateLinkPrefixDebtBytes(Tf2Ps3SourceLoadingFrameRawFrame frame)
     {
+        return frame.Kind == "PlayerStateLink"
+            ? Math.Min(frame.PrefixLength.GetValueOrDefault(), frame.Length)
+            : 0;
+    }
+
+    private static int NativePlayerStateLinkTrailingDebtBytes(Tf2Ps3SourceLoadingFrameRawFrame frame, int nativeRecordBytes)
+    {
+        if (frame.Kind != "PlayerStateLink")
+        {
+            return 0;
+        }
+
+        var offset = NativePlayerStateLinkPrefixDebtBytes(frame);
+        return Math.Max(0, frame.Length - offset - nativeRecordBytes);
+    }
+
+    private static bool ShouldBuildPlayerStateLinkAsNativeSnapshot(int initialSetupVariant, int length, int seedStageIndex)
+    {
+        if (length >= 48)
+        {
+            return true;
+        }
+
         return initialSetupVariant switch
         {
             2 => length == 210 || length is >= 256 and < 998,
@@ -435,8 +576,8 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
             var (kind, prefix, maxRecords) = kindCode switch
             {
                 'L' => PlayerStateLinkFrameShape(length),
-                'M' => ("MixedBinary", (int?)null, (int?)null),
-                _ => ("HighEntropy", (int?)null, (int?)null)
+                'M' => ("NativeQueuedBoundary", (int?)null, (int?)null),
+                _ => ("NativeSnapshot", (int?)null, (int?)null)
             };
             frames.Add(new Tf2Ps3SourceLoadingFrameRawFrame(
                 collection,
@@ -540,10 +681,14 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
 
     private static (string Kind, int? PrefixLength, int? MaxRecords) PlayerStateLinkFrameShape(int length)
     {
+        if (length >= 512)
+        {
+            var recordCount = LargePlayerStateLinkRecordCount(length);
+            return ("PlayerStateLink", Math.Max(0, length - (recordCount * 12)), recordCount);
+        }
+
         var (prefixLength, maxRecords) = length switch
         {
-            >= 1000 => (28, 9),
-            >= 600 => (24, 9),
             >= 250 => (18, 9),
             >= 160 => (14, 8),
             >= 120 => (14, 7),
@@ -556,6 +701,52 @@ public static partial class Tf2Ps3SourceLoadingFrameDebtReducer
         };
 
         return ("PlayerStateLink", prefixLength, maxRecords);
+    }
+
+    private static int LargePlayerStateLinkRecordCount(int length)
+    {
+        ReadOnlySpan<(int BodyLength, int RecordCount)> retailBodies =
+        [
+            (1212, 2),
+            (1198, 3),
+            (1180, 3),
+            (1156, 2),
+            (1152, 1),
+            (1149, 1),
+            (1142, 1),
+            (1112, 1),
+            (982, 1),
+            (944, 3),
+            (944, 1),
+            (874, 2),
+            (860, 1),
+            (686, 4),
+            (685, 1),
+            (634, 3),
+            (620, 2),
+            (620, 4),
+            (606, 3),
+            (602, 2),
+            (592, 2),
+            (588, 1),
+            (578, 1)
+        ];
+
+        var bestRecordCount = 1;
+        var bestDelta = int.MaxValue;
+        foreach (var (bodyLength, recordCount) in retailBodies)
+        {
+            var delta = Math.Abs(length - bodyLength);
+            if (delta >= bestDelta)
+            {
+                continue;
+            }
+
+            bestDelta = delta;
+            bestRecordCount = recordCount;
+        }
+
+        return bestRecordCount;
     }
 
     private static int LoadingContinuationSequenceAdvance(int length)
@@ -689,6 +880,7 @@ public sealed record Tf2Ps3SourceLoadingFrameDebtReport(
     Tf2Ps3SourceLoadingFrameCollectionSummary[] Collections,
     Tf2Ps3SourceLoadingFrameFrame[] Frames,
     Tf2Ps3SourceLoadingFrameFrame[] PriorityFrames,
+    Tf2Ps3SourceNativeRecordPrefixDebtFamily[] NativeRecordPrefixDebtFamilies,
     Tf2Ps3SourceLoadingFrameGeneratorCallSite[] DirectGeneratorCallSites,
     string[] Conclusions);
 
@@ -710,6 +902,9 @@ public sealed record Tf2Ps3SourceLoadingFrameDebtSummary(
     int NativeRecordWithGeneratedPrefixFrameCount,
     int SteadyNativeSnapshotPaddingRiskCount,
     int BlockingByteCount,
+    int NativeRecordPrefixDebtBytes,
+    int NativeRecordTrailingDebtBytes,
+    int NativeRecordVisibleRecordBytes,
     int DirectGeneratorCallSiteCount,
     int StaticHexTemplateCount,
     int NativeTemplateDebtHighEntropyLoadingFrameCount,
@@ -734,7 +929,30 @@ public sealed record Tf2Ps3SourceLoadingFrameCollectionSummary(
     int ProductionFakeFrameCount,
     int NativeRecordWithGeneratedPrefixFrameCount,
     int SteadyNativeSnapshotPaddingRiskCount,
-    int BlockingByteCount);
+    int BlockingByteCount,
+    int NativeRecordPrefixDebtBytes,
+    int NativeRecordTrailingDebtBytes,
+    int NativeRecordVisibleRecordBytes);
+
+public sealed record Tf2Ps3SourceNativeRecordPrefixDebtFamily(
+    string Family,
+    string Phase,
+    int Variant,
+    int Length,
+    int PrefixLength,
+    int MaxRecords,
+    int FrameCount,
+    int BlockingByteCount,
+    int PrefixDebtBytes,
+    int TrailingDebtBytes,
+    int NativeRecordByteCount,
+    string DominantDebtKind,
+    int PriorityScore,
+    string FirstCollection,
+    int FirstStageIndex,
+    int FirstFrameIndex,
+    int LineNumber,
+    string RequiredNativeWriter);
 
 public sealed record Tf2Ps3SourceLoadingFrameCollection(
     string Name,
@@ -777,6 +995,9 @@ public sealed record Tf2Ps3SourceLoadingFrameFrame(
     string Risk,
     string ReplacementTarget,
     int BlockingByteCount,
+    int NativeRecordPrefixDebtBytes,
+    int NativeRecordTrailingDebtBytes,
+    int NativeRecordByteCount,
     int PriorityScore,
     int LineNumber,
     string RecommendedNextAction);

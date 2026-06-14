@@ -13,6 +13,7 @@ var gameMap = Environment.GetEnvironmentVariable("PLASMA_GAME_MAP") ?? GameManag
 var gameName = Environment.GetEnvironmentVariable("PLASMA_GAME_NAME") ?? GameManagerSessionOptions.Default.Name;
 var gameAdvertisedHost = Environment.GetEnvironmentVariable("PLASMA_GAME_ADVERTISED_HOST") ?? GameManagerSessionOptions.Default.AdvertisedHost;
 var gameAdvertisedPort = ParseInt(Environment.GetEnvironmentVariable("PLASMA_GAME_ADVERTISED_PORT"), GameManagerSessionOptions.Default.AdvertisedPort);
+var nativeSourceContentRootPath = Environment.GetEnvironmentVariable("PLASMA_TF2_SOURCE_CONTENT_ROOT") ?? "";
 var sourceHost = Environment.GetEnvironmentVariable("PLASMA_SOURCE_HOST") ?? "127.0.0.1";
 var sourcePort = int.TryParse(Environment.GetEnvironmentVariable("PLASMA_SOURCE_PORT"), out var parsedSourcePort)
     ? parsedSourcePort
@@ -101,6 +102,9 @@ for (var i = 0; i < args.Length; i++)
         case "--map-metadata" when i + 1 < args.Length:
             mapMetadataPath = args[++i];
             break;
+        case "--tf2-source-content-root" when i + 1 < args.Length:
+            nativeSourceContentRootPath = args[++i];
+            break;
         case "--control-bind" when i + 1 < args.Length:
             controlBind = IPAddress.Parse(args[++i]);
             controlEnabled = true;
@@ -119,7 +123,7 @@ for (var i = 0; i < args.Length; i++)
             controlEnabled = false;
             break;
         case "--help":
-            Console.WriteLine("Usage: PlasmaGameManager.Server --bind 0.0.0.0 --port 27015 --profile tf2-ps3 [--ports 27015,27016] [--game-map ctf_2fort] [--game-name TF2PS3] [--max-players 24] [--advertised-host 127.0.0.1] [--advertised-port 27015] [--game-id 800001] [--game-local-id 257] [--evidence-log logs/gamemanager-events.jsonl] [--source-host 127.0.0.1 --source-port 27016] [--source-protocol ps3-native-passthrough|pc-source-connectionless-only|ps3-native-generated] [--source-launch-profile artifacts/custom-server-profile.json] [--source-launch-profile-glob 'artifacts/arcadia-source-profile-{gid}-{map}.json'] [--tf2-ranked-stats-export artifacts/live-stack/tf2-ranked-stats.jsonl] [--map-metadata artifacts/tf2ps3-map-metadata.json] [--control-bind 127.0.0.1 --control-port 27017 --control-user FridiNaTor --control-password Clockwor1] [--no-control]");
+            Console.WriteLine("Usage: PlasmaGameManager.Server --bind 0.0.0.0 --port 27015 --profile tf2-ps3 [--ports 27015,27016] [--game-map ctf_2fort] [--game-name TF2PS3] [--max-players 24] [--advertised-host 127.0.0.1] [--advertised-port 27015] [--game-id 800001] [--game-local-id 257] [--evidence-log logs/gamemanager-events.jsonl] [--source-host 127.0.0.1 --source-port 27016] [--source-protocol ps3-native-passthrough|pc-source-connectionless-only|ps3-native-generated] [--source-launch-profile artifacts/custom-server-profile.json] [--source-launch-profile-glob 'artifacts/arcadia-source-profile-{gid}-{map}.json'] [--tf2-ranked-stats-export artifacts/live-stack/tf2-ranked-stats.jsonl] [--map-metadata artifacts/tf2ps3-map-metadata.json] [--tf2-source-content-root .local/input/TF2PS3/GAME/TF] [--control-bind 127.0.0.1 --control-port 27017 --control-user FridiNaTor --control-password Clockwor1] [--no-control]");
             return;
     }
 }
@@ -147,7 +151,8 @@ using (eventSink)
         PreferredPlayerName: GameManagerSessionOptions.Default.PreferredPlayerName,
         AdvertisedHost: string.IsNullOrWhiteSpace(gameAdvertisedHost) ? GameManagerSessionOptions.Default.AdvertisedHost : gameAdvertisedHost,
         AdvertisedPort: gameAdvertisedPort,
-        MapMetadataPath: mapMetadataPath);
+        MapMetadataPath: mapMetadataPath,
+        NativeSourceContentRootPath: nativeSourceContentRootPath);
     if (!string.IsNullOrWhiteSpace(sourceLaunchProfilePath))
     {
         var launchProfile = Tf2SourceLaunchProfile.LoadFromJsonFile(sourceLaunchProfilePath);
@@ -170,6 +175,10 @@ using (eventSink)
     if (!string.IsNullOrWhiteSpace(sessionOptions.MapMetadataPath))
     {
         Console.WriteLine($"loading TF2 PS3 map metadata from {sessionOptions.MapMetadataPath}");
+    }
+    if (!string.IsNullOrWhiteSpace(sessionOptions.NativeSourceContentRootPath))
+    {
+        Console.WriteLine($"loading TF2 PS3 native Source content from {sessionOptions.NativeSourceContentRootPath}");
     }
     if (!string.IsNullOrWhiteSpace(sessionOptions.NativeRankedStatsExportPath))
     {

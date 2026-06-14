@@ -182,6 +182,29 @@ public sealed class PcapPlainEnglishTraceExporter
             if (raw.Direction == PcapActiveFlowDirection.ClientToServer)
             {
                 var clientInfo = Ps3SourceClientPayloadClassifier.Classify(transport, directionCount, sequenceDelta);
+                var decodedNetMessageType = clientInfo.DecodedNetMessageType;
+                var decodedNetMessageName = clientInfo.DecodedNetMessageName;
+                var decodedNetMessagePayloadKind = clientInfo.DecodedNetMessagePayloadKind;
+                var decodedNetMessagePayloadOffset = clientInfo.DecodedNetMessagePayloadOffset;
+                var decodedNetMessagePayloadLength = clientInfo.DecodedNetMessagePayloadLength;
+                var decodedNetMessagePayloadBitCount = clientInfo.DecodedNetMessagePayloadBitCount;
+                bool? decodedNetMessageStrong = decodedNetMessageType is not null;
+                string? decodedNetMessageStrengthReason = decodedNetMessageType is null
+                    ? null
+                    : "accepted by the strict native client net-message decoder";
+                if (decodedNetMessageType is null
+                    && TryDecodeTraceClientNetMessageCandidate(transport.Body, out var decodedCandidate, out var decodedStrength))
+                {
+                    decodedNetMessageType = decodedCandidate.MessageType;
+                    decodedNetMessageName = decodedCandidate.MessageName;
+                    decodedNetMessagePayloadKind = decodedCandidate.PayloadKind.ToString();
+                    decodedNetMessagePayloadOffset = decodedCandidate.PayloadOffset;
+                    decodedNetMessagePayloadLength = decodedCandidate.PayloadLength;
+                    decodedNetMessagePayloadBitCount = decodedCandidate.PayloadBitCount;
+                    decodedNetMessageStrong = decodedStrength.IsStrong;
+                    decodedNetMessageStrengthReason = decodedStrength.Reason;
+                }
+
                 Ps3SourceClientCommandIntent? intent = null;
                 Ps3SourceClientCommandIntent.TryDecode(clientInfo, transport.Body, out intent);
                 clientPayload = new PcapPlainEnglishClientPayload(
@@ -196,12 +219,14 @@ public sealed class PcapPlainEnglishTraceExporter
                     clientInfo.BitSidecarOffset,
                     clientInfo.BitSidecarBitCount,
                     clientInfo.BitSidecarPayloadLength,
-                    clientInfo.DecodedNetMessageType,
-                    clientInfo.DecodedNetMessageName,
-                    clientInfo.DecodedNetMessagePayloadKind,
-                    clientInfo.DecodedNetMessagePayloadOffset,
-                    clientInfo.DecodedNetMessagePayloadLength,
-                    clientInfo.DecodedNetMessagePayloadBitCount,
+                    decodedNetMessageType,
+                    decodedNetMessageName,
+                    decodedNetMessagePayloadKind,
+                    decodedNetMessagePayloadOffset,
+                    decodedNetMessagePayloadLength,
+                    decodedNetMessagePayloadBitCount,
+                    decodedNetMessageStrong,
+                    decodedNetMessageStrengthReason,
                     intent is null
                         ? null
                         : new PcapPlainEnglishClientCommandIntent(
@@ -430,22 +455,27 @@ public sealed class PcapPlainEnglishTraceExporter
 
         if (semantic.Role is Ps3SourcePayloadSemanticRole.FrozenStateBatch or Ps3SourcePayloadSemanticRole.FrozenStateObjectBatch)
         {
-            if (embeddedPrefix is not null)
+            if (embeddedPrefix is not null && embeddedPrefix.PrefixLength > 0)
             {
                 unknowns.Add(embeddedPrefix.UnknownField);
             }
-
-            unknowns.Add("allocator/source for object ids and roster ordering");
         }
 
-        if (semantic.Role == Ps3SourcePayloadSemanticRole.PlayerStateLinkBatch)
+        if (semantic.Role == Ps3SourcePayloadSemanticRole.PlayerStateLinkBatch
+            && embeddedPrefix is not null
+            && embeddedPrefix.PrefixLength > 0)
         {
-            unknowns.Add(embeddedPrefix?.UnknownField ?? "exact semantic names for PNG linked-object fields");
+            unknowns.Add(embeddedPrefix.UnknownField);
         }
 
         if (clientPayload?.Role == Ps3SourceClientPayloadRole.UserCommandCandidate.ToString())
         {
             unknowns.Add("exact usercmd bit layout; current movement/team/class values are heuristic");
+        }
+
+        if (clientPayload?.DecodedNetMessageStrong == false)
+        {
+            unknowns.Add($"weak native client net-message candidate; {clientPayload.DecodedNetMessageStrengthReason}");
         }
 
         if (bodyLength >= 512 && records.Length == 0)
@@ -510,6 +540,28 @@ public sealed class PcapPlainEnglishTraceExporter
         return ($"Client sends markerless native binary payload ({bodyLength} body bytes) with semantic role {semantic.Role}.", "low");
     }
 
+    private static bool TryDecodeTraceClientNetMessageCandidate(
+        ReadOnlySpan<byte> body,
+        out Ps3SourceDecodedClientNetMessage message,
+        out Ps3SourceClientNetMessageDecodeStrength strength)
+    {
+        message = default!;
+        strength = default!;
+        if (!Ps3SourceClientNetMessageDecoder.TryDecode(body, out var candidate)
+            || candidate.PayloadOffset < 0
+            || candidate.PayloadLength < 0
+            || candidate.PayloadOffset > body.Length
+            || candidate.PayloadOffset + candidate.PayloadLength > body.Length)
+        {
+            return false;
+        }
+
+        var payload = body.Slice(candidate.PayloadOffset, candidate.PayloadLength);
+        strength = Ps3SourceClientNetMessageDecoder.AssessDecodeStrength(candidate, payload);
+        message = candidate;
+        return true;
+    }
+
     private static (string Text, string Confidence) ExplainServer(
         Ps3SourceGameplayPacketShape shape,
         Ps3SourceNativeFrameInfo frame,
@@ -562,7 +614,9 @@ public sealed class PcapPlainEnglishTraceExporter
 
         if (semantic.Role is Ps3SourcePayloadSemanticRole.NativeServerInfo49 or Ps3SourcePayloadSemanticRole.NativeResourceStringTable45 or Ps3SourcePayloadSemanticRole.NativePlayerSummary44)
         {
-            return ($"Server sends native Source message {semantic.Role}.", "medium");
+            return string.IsNullOrWhiteSpace(semantic.NativeFieldSummary)
+                ? ($"Server sends native Source message {semantic.Role}.", "medium")
+                : ($"Server sends native Source message {semantic.Role}: {semantic.NativeFieldSummary}.", "high");
         }
 
         if (shape == Ps3SourceGameplayPacketShape.NearMtuFragment || frame.Kind == Ps3SourceNativeFrameKind.QueuedPeerChannelChunkCandidate)
@@ -1442,6 +1496,8 @@ public sealed record PcapPlainEnglishClientPayload(
     int? DecodedNetMessagePayloadOffset,
     int? DecodedNetMessagePayloadLength,
     int? DecodedNetMessagePayloadBitCount,
+    bool? DecodedNetMessageStrong,
+    string? DecodedNetMessageStrengthReason,
     PcapPlainEnglishClientCommandIntent? CommandIntent);
 
 public sealed record PcapPlainEnglishClientCommandIntent(

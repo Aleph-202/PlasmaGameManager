@@ -72,6 +72,9 @@ public static class Tf2Ps3SourceQueuedPrefixContractReducer
                 nativeBoundaries.Length,
                 objectTargets.Length),
             nativeBoundaries,
+            CloneObjectProperty(queuedPeerTarget.RootElement, "NativeQueueContract"),
+            CloneObjectProperty(queuedPeerTarget.RootElement, "NativeSendWrapperContract"),
+            CloneObjectProperty(queuedPeerTarget.RootElement, "NativeQueueDrainContract"),
             objectTargets,
             topFamilies.Select(ClassifyFamily).ToArray(),
             prefixDebts,
@@ -265,6 +268,10 @@ public static class Tf2Ps3SourceQueuedPrefixContractReducer
         {
             conclusions.Add("Generated queued PlayerStateLink prefixes remain open native-debt even when no static template bytes remain for those bodies.");
         }
+        else
+        {
+            conclusions.Add("No generated queued PlayerStateLink prefix debt remains in the current responder; remaining corpus prefix bytes describe the native peer-channel format to preserve.");
+        }
 
         if (ReadInt(queuedSummary, "ClientQueuedChunkPacketCount") == 0)
         {
@@ -272,6 +279,17 @@ public static class Tf2Ps3SourceQueuedPrefixContractReducer
         }
 
         return conclusions.ToArray();
+    }
+
+    private static JsonElement CloneObjectProperty(JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.Object)
+        {
+            return value.Clone();
+        }
+
+        using var empty = JsonDocument.Parse("{}");
+        return empty.RootElement.Clone();
     }
 
     private static Tf2Ps3SourceQueuedPrefixCount[] ReadCounts(JsonElement element, string property)
@@ -325,6 +343,9 @@ public sealed record Tf2Ps3SourceQueuedPrefixContractReport(
     Tf2Ps3SourceQueuedPrefixContractInputs Inputs,
     Tf2Ps3SourceQueuedPrefixContractSummary Summary,
     Tf2Ps3SourceQueuedPrefixNativeBoundary[] NativeBoundaries,
+    JsonElement NativeQueueContract,
+    JsonElement NativeSendWrapperContract,
+    JsonElement NativeQueueDrainContract,
     Tf2Ps3SourceQueuedPrefixObjectStreamTarget[] ObjectStreamTargets,
     Tf2Ps3SourceQueuedPrefixFamily[] PrefixFamilies,
     Tf2Ps3SourceQueuedPrefixStaticDebt[] StaticTemplatePrefixDebt,

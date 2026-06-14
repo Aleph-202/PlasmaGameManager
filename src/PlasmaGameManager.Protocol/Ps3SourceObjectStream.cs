@@ -93,17 +93,19 @@ public static class Ps3SourceObjectStream
             throw new ArgumentOutOfRangeException(nameof(payloadBitCount));
         }
 
-        if (payloadBitCount == 0)
+        var inputBytesToCopy = (payloadBitCount + 7) >> 3;
+        if (inputBytesToCopy == 0)
         {
             return [];
         }
 
-        var outputBitCount = payloadBitCount + TerminatorBitCount;
-        var output = new byte[(outputBitCount + 7) >> 3];
-        var inputBytesToCopy = (payloadBitCount + 7) >> 3;
+        // TF.elf 00a55e60 advances the source bit-buffer by five terminator
+        // bits but submits the original rounded byte count to the object
+        // stream. It never appends a new terminator byte here.
+        var output = new byte[inputBytesToCopy];
         payload[..inputBytesToCopy].CopyTo(output);
         var usedBitsInLastByte = payloadBitCount & 7;
-        if (usedBitsInLastByte != 0)
+        if (usedBitsInLastByte is >= 1 and <= 3)
         {
             output[inputBytesToCopy - 1] &= (byte)((1 << usedBitsInLastByte) - 1);
         }

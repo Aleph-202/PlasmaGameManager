@@ -11,7 +11,8 @@ public sealed record Ps3SourceEntityDeltaNativeRecord(
     string? ObjectName,
     int? QueuedHandle,
     int BitLength,
-    byte[] RawPayload);
+    byte[] RawPayload,
+    bool UsesNativePartialWindow = false);
 
 public sealed record Ps3SourceEntityDeltaNativeRecordOptions(
     byte GroupIndex,
@@ -22,7 +23,8 @@ public sealed record Ps3SourceEntityDeltaNativeRecordOptions(
     string? ObjectName,
     int? QueuedHandle,
     int BitLength,
-    byte[] RawPayload);
+    byte[] RawPayload,
+    bool UseNativePartialWindow = false);
 
 public sealed record Ps3SourceQueuedBitstreamDescriptor(
     byte[] Buffer,
@@ -195,7 +197,8 @@ public static class Ps3SourceEntityDeltaFrameBuilder
                 record.ObjectName,
                 record.QueuedHandle,
                 record.BitLength,
-                record.RawPayload));
+                record.RawPayload,
+                record.UsesNativePartialWindow));
         }
 
         return EncodeNativeRecords(records);
@@ -246,7 +249,8 @@ public static class Ps3SourceEntityDeltaFrameBuilder
         byte entityCount,
         uint? objectId,
         string? objectName,
-        Ps3SourceQueuedBitstreamDescriptor descriptor)
+        Ps3SourceQueuedBitstreamDescriptor descriptor,
+        bool useNativePartialWindow = false)
     {
         return new Ps3SourceEntityDeltaNativeRecordOptions(
             groupIndex,
@@ -257,7 +261,8 @@ public static class Ps3SourceEntityDeltaFrameBuilder
             objectName,
             descriptor.QueuedHandlePresent ? descriptor.QueuedHandle : null,
             descriptor.BitLength,
-            descriptor.Buffer);
+            descriptor.Buffer,
+            useNativePartialWindow);
     }
 
     public static Ps3SourceEntityDeltaNativeRecordOptions BuildFullGroupRecordFromQueuedDescriptor(
@@ -279,6 +284,21 @@ public static class Ps3SourceEntityDeltaFrameBuilder
     public static Ps3SourceEntityDeltaGroupEncodeResult EncodeActiveGroups(
         IReadOnlyList<Ps3SourceEntityDeltaGroupState> groups,
         int frameIndex)
+    {
+        return EncodeActiveGroups(groups, frameIndex, useNativePartialWindows: false);
+    }
+
+    public static Ps3SourceEntityDeltaGroupEncodeResult EncodeActiveGroupsNativePartialWindows(
+        IReadOnlyList<Ps3SourceEntityDeltaGroupState> groups,
+        int frameIndex)
+    {
+        return EncodeActiveGroups(groups, frameIndex, useNativePartialWindows: true);
+    }
+
+    private static Ps3SourceEntityDeltaGroupEncodeResult EncodeActiveGroups(
+        IReadOnlyList<Ps3SourceEntityDeltaGroupState> groups,
+        int frameIndex,
+        bool useNativePartialWindows)
     {
         var writer = new EntityDeltaBitWriter();
         var nextGroups = new Ps3SourceEntityDeltaGroupState[groups.Count];
@@ -305,7 +325,8 @@ public static class Ps3SourceEntityDeltaFrameBuilder
                         group.EntityCount,
                         group.ObjectId,
                         group.ObjectName,
-                        group.Descriptor)
+                        group.Descriptor,
+                        useNativePartialWindows)
                     : BuildFullGroupRecordFromQueuedDescriptor(group.GroupIndex, group.Descriptor);
                 WriteNativeRecord(writer, record);
                 nextGroups[i] = group.MarkWritten(frameIndex);
@@ -374,14 +395,30 @@ public static class Ps3SourceEntityDeltaFrameBuilder
         if (partialRun != 0)
         {
             if (!reader.TryReadBits(PartialRunStartIndexBitWidth, out var start)
-                || !reader.TryReadBits(PartialRunEntityCountBitWidth, out var count)
-                || !reader.TryReadBits(1, out var hasObject))
+                || !reader.TryReadBits(PartialRunEntityCountBitWidth, out var count))
             {
                 return false;
             }
 
             startIndex = checked((int)start);
             entityCount = checked((byte)count);
+            var partialTailCheckpoint = reader.ConsumedBits;
+            if (TryDecodeNativePartialWindowTail(
+                    reader,
+                    checked((byte)groupIndex),
+                    startIndex.Value,
+                    entityCount.Value,
+                    out record))
+            {
+                return true;
+            }
+
+            reader.ConsumedBits = partialTailCheckpoint;
+            if (!reader.TryReadBits(1, out var hasObject))
+            {
+                return false;
+            }
+
             if (hasObject != 0)
             {
                 if (!reader.TryReadBits(32, out var id) || !reader.TryReadStringZ(128, out objectName))
@@ -391,7 +428,6 @@ public static class Ps3SourceEntityDeltaFrameBuilder
 
                 objectId = id;
             }
-
             if (!TryReadOptionalQueuedHandle(reader, out var queuedHandle)
                 || !reader.TryReadBits(PartialRunBitLengthWidth, out var rawBitLength))
             {
@@ -413,7 +449,8 @@ public static class Ps3SourceEntityDeltaFrameBuilder
                 objectName,
                 queuedHandle,
                 bitLength,
-                rawPayload);
+                rawPayload,
+                UsesNativePartialWindow: false);
             return true;
         }
 
@@ -438,7 +475,89 @@ public static class Ps3SourceEntityDeltaFrameBuilder
             objectName,
             fullQueuedHandle,
             bitLength,
-            fullPayload);
+            fullPayload,
+            UsesNativePartialWindow: false);
+        return true;
+    }
+
+    private static bool TryDecodeNativePartialWindowTail(
+        EntityDeltaBitReader reader,
+        byte groupIndex,
+        int startIndex,
+        byte entityCount,
+        out Ps3SourceEntityDeltaNativeRecord record)
+    {
+        record = default!;
+        if (startIndex != 0)
+        {
+            return false;
+        }
+
+        if (!reader.TryReadBits(1, out var partialWindowMode))
+        {
+            return false;
+        }
+
+        uint? objectId = null;
+        string? objectName = null;
+        int? queuedHandle;
+        int bitLength;
+        if (partialWindowMode == 0)
+        {
+            if (!TryReadOptionalQueuedHandle(reader, out queuedHandle)
+                || !reader.TryReadBits(FullGroupBitLengthWidth, out var rawBitLength))
+            {
+                return false;
+            }
+
+            bitLength = checked((int)rawBitLength);
+        }
+        else
+        {
+            if (startIndex == 0)
+            {
+                if (!reader.TryReadBits(1, out var hasObject))
+                {
+                    return false;
+                }
+
+                if (hasObject != 0)
+                {
+                    if (!reader.TryReadBits(32, out var id)
+                        || !reader.TryReadStringZ(128, out objectName))
+                    {
+                        return false;
+                    }
+
+                    objectId = id;
+                }
+            }
+
+            if (!TryReadOptionalQueuedHandle(reader, out queuedHandle)
+                || !reader.TryReadBits(PartialRunBitLengthWidth, out var rawBitLength))
+            {
+                return false;
+            }
+
+            bitLength = checked((int)rawBitLength);
+        }
+
+        if (!reader.TryReadRawBits(bitLength, out var rawPayload))
+        {
+            return false;
+        }
+
+        record = new Ps3SourceEntityDeltaNativeRecord(
+            groupIndex,
+            IsPartialRun: true,
+            startIndex,
+            entityCount,
+            objectId,
+            objectName,
+            queuedHandle,
+            bitLength,
+            rawPayload,
+            UsesNativePartialWindow: true);
         return true;
     }
 
@@ -585,6 +704,13 @@ public static class Ps3SourceEntityDeltaFrameBuilder
             {
                 throw new ArgumentException("Object name can only be serialized when ObjectId is present.", nameof(record));
             }
+
+            if (record.UseNativePartialWindow
+                && record.ObjectId is not null
+                && record.StartIndex != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(record), "TF.elf writes object descriptors only at native partial-window start index zero.");
+            }
         }
         else if (record.BitLength >= (1 << FullGroupBitLengthWidth))
         {
@@ -609,6 +735,41 @@ public static class Ps3SourceEntityDeltaFrameBuilder
         {
             writer.WriteBits(checked((uint)record.StartIndex!.Value), PartialRunStartIndexBitWidth);
             writer.WriteBits(record.EntityCount!.Value, PartialRunEntityCountBitWidth);
+            if (record.UseNativePartialWindow)
+            {
+                WriteNativePartialWindowTail(writer, record);
+            }
+            else
+            {
+                if (record.ObjectId is { } objectId)
+                {
+                    writer.WriteBits(1, 1);
+                    writer.WriteBits(objectId, 32);
+                    writer.WriteStringZ(record.ObjectName ?? "");
+                }
+                else
+                {
+                    writer.WriteBits(0, 1);
+                }
+
+                WriteOptionalQueuedHandle(writer, record.QueuedHandle);
+                writer.WriteBits(checked((uint)record.BitLength), PartialRunBitLengthWidth);
+            }
+        }
+        else
+        {
+            WriteOptionalQueuedHandle(writer, record.QueuedHandle);
+            writer.WriteBits(checked((uint)record.BitLength), FullGroupBitLengthWidth);
+        }
+
+        writer.WriteRawBits(record.RawPayload, record.BitLength);
+    }
+
+    private static void WriteNativePartialWindowTail(EntityDeltaBitWriter writer, Ps3SourceEntityDeltaNativeRecordOptions record)
+    {
+        writer.WriteBits(1, 1);
+        if (record.StartIndex == 0)
+        {
             if (record.ObjectId is { } objectId)
             {
                 writer.WriteBits(1, 1);
@@ -619,17 +780,10 @@ public static class Ps3SourceEntityDeltaFrameBuilder
             {
                 writer.WriteBits(0, 1);
             }
-
-            WriteOptionalQueuedHandle(writer, record.QueuedHandle);
-            writer.WriteBits(checked((uint)record.BitLength), PartialRunBitLengthWidth);
-        }
-        else
-        {
-            WriteOptionalQueuedHandle(writer, record.QueuedHandle);
-            writer.WriteBits(checked((uint)record.BitLength), FullGroupBitLengthWidth);
         }
 
-        writer.WriteRawBits(record.RawPayload, record.BitLength);
+        WriteOptionalQueuedHandle(writer, record.QueuedHandle);
+        writer.WriteBits(checked((uint)record.BitLength), PartialRunBitLengthWidth);
     }
 
     private static void WriteOptionalQueuedHandle(EntityDeltaBitWriter writer, int? queuedHandle)

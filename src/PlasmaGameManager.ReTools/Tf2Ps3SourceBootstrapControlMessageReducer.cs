@@ -64,7 +64,7 @@ public static partial class Tf2Ps3SourceBootstrapControlMessageReducer
             [
                 "008cd0b8 is NET_SignonState::WriteToBuffer: 5-bit type, 8-bit signon state, 32-bit spawn count.",
                 "008cd018 is SVC_SetView::WriteToBuffer: 5-bit type, 11-bit entity index.",
-                "The bootstrap object-stream batch should include signon state 3 after server-info/send-table/string-table setup, signon state 4 after class-info setup, then SVC_SetView and signon state 5 before the later update-string-table route."
+                "The bootstrap object-stream batch should include signon state 3 after server-info/send-table/string-table setup, signon state 4 after class-info setup, then SVC_SetView followed by signon state 5 and final/full signon state 6 before the later update-string-table route."
             ]);
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");

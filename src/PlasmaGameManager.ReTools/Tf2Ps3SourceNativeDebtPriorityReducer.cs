@@ -32,7 +32,7 @@ public static class Tf2Ps3SourceNativeDebtPriorityReducer
         var prefixSummary = queuedPrefixContract.RootElement.GetProperty("Summary");
         var highEntropyCount = debtSummary.GetProperty("HighEntropyLoadingFrameCount").GetInt32();
         var mixedBinaryCount = debtSummary.GetProperty("MixedBinaryLoadingFrameCount").GetInt32();
-        var generatedFillerTargets = BuildGeneratedFillerTargets(highEntropyCount, mixedBinaryCount);
+        var generatedFillerTargets = BuildGeneratedFillerTargets(highEntropyCount, mixedBinaryCount).ToArray();
         var generatedPrefixTargets = ReadGeneratedQueuedPrefixTargets(queuedPrefixContract.RootElement).ToArray();
         var prioritizedTargets = templateTargets
             .Concat(generatedFillerTargets)
@@ -153,11 +153,11 @@ public static class Tf2Ps3SourceNativeDebtPriorityReducer
             RecommendationFor(replacementTarget, directSendSites.Length > 0, staticPrefixBytes, tailRecordCount));
     }
 
-    private static Tf2Ps3SourceNativeDebtPriorityTarget[] BuildGeneratedFillerTargets(int highEntropyCount, int mixedBinaryCount)
+    private static IEnumerable<Tf2Ps3SourceNativeDebtPriorityTarget> BuildGeneratedFillerTargets(int highEntropyCount, int mixedBinaryCount)
     {
-        return
-        [
-            new Tf2Ps3SourceNativeDebtPriorityTarget(
+        if (highEntropyCount > 0)
+        {
+            yield return new Tf2Ps3SourceNativeDebtPriorityTarget(
                 "LoadingContinuationFrameKind.HighEntropy",
                 "generated-filler-recipe",
                 "native-snapshot-and-entity-delta-route",
@@ -167,13 +167,17 @@ public static class Tf2Ps3SourceNativeDebtPriorityReducer
                 0,
                 0,
                 false,
-                ["AddLoadingFrames", "BuildHighEntropyBinaryBody", "FillHighEntropyDeterministic"],
-                ["deterministic-loading-recipe"],
+                ["AddLoadingFrames", "TryBuildNativeSnapshotBody", "BuildHighEntropyBinaryBody", "FillHighEntropyDeterministic"],
+                ["native-snapshot-attempt-with-deterministic-fallback"],
                 [],
                 [],
                 [$"high-entropy generated loading frame recipes: {highEntropyCount}"],
-                "Replace generated high-entropy loading frames with named Source snapshot/entity-delta or object-stream payloads from TF.elf/server.dll semantics."),
-            new Tf2Ps3SourceNativeDebtPriorityTarget(
+                "High-entropy loading frames now attempt native Source snapshot/entity-delta bodies first; prove coverage and remove the deterministic fallback before marking this route native.");
+        }
+
+        if (mixedBinaryCount > 0)
+        {
+            yield return new Tf2Ps3SourceNativeDebtPriorityTarget(
                 "LoadingContinuationFrameKind.MixedBinary",
                 "generated-filler-recipe",
                 "queued-peer-submessage-boundaries",
@@ -188,8 +192,8 @@ public static class Tf2Ps3SourceNativeDebtPriorityReducer
                 [],
                 [],
                 [$"mixed-binary generated loading frame recipes: {mixedBinaryCount}"],
-                "Replace generated mixed-binary loading frames with named queued-peer control/submessage fields.")
-        ];
+                "Replace generated mixed-binary loading frames with named queued-peer control/submessage fields.");
+        }
     }
 
     private static IEnumerable<Tf2Ps3SourceNativeDebtPriorityTarget> ReadGeneratedQueuedPrefixTargets(JsonElement root)

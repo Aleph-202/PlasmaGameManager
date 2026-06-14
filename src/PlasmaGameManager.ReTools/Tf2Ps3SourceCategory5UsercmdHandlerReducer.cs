@@ -32,7 +32,8 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
         string clcMoveContextPath,
         string clcMoveContractPath,
         string serverDllUsercmdDecoderPath,
-        string outputPath)
+        string outputPath,
+        string? ghidraXrefsPath = null)
     {
         var cLines = await File.ReadAllLinesAsync(cExportPath);
         var functions = ExtractFunctions(cLines)
@@ -61,6 +62,10 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
         using var clcContext = File.Exists(clcMoveContextPath)
             ? JsonDocument.Parse(await File.ReadAllTextAsync(clcMoveContextPath))
             : null;
+        using var ghidraXrefs = !string.IsNullOrWhiteSpace(ghidraXrefsPath) && File.Exists(ghidraXrefsPath)
+            ? JsonDocument.Parse(await File.ReadAllTextAsync(ghidraXrefsPath))
+            : null;
+        var ghidraEvidence = BuildGhidraEvidence(ghidraXrefs?.RootElement, ghidraXrefsPath);
 
         var category5Tokens = BuildCategory5Tokens(category5Consumer?.Body ?? "");
         var wrapperTokens = BuildWrapperTokens(wrapper?.Body ?? "", clcContext?.RootElement);
@@ -96,8 +101,17 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
             new Tf2Ps3SourceCategory5UsercmdHandlerGate(
                 "category-5-handler-table-cell-recovered",
                 handlerOpdRecovered ? "proven" : "missing",
-                $"0x{handlerTableCell:x8} -> 0x{handlerOpd:x8} -> 00a2bd18",
+                ghidraEvidence.HandlerCellPointsToWrapper
+                    ? $"0x{handlerTableCell:x8} -> 0x{handlerOpd:x8} -> 00a2bd18; Ghidra xrefs confirm 0180b80c -> 0190cdc8 -> 00a2bd18"
+                    : $"0x{handlerTableCell:x8} -> 0x{handlerOpd:x8} -> 00a2bd18",
                 "The BLES TF.elf table cell for the usercmd wrapper must be found in the executable."),
+            new Tf2Ps3SourceCategory5UsercmdHandlerGate(
+                "ghidra-category-5-handler-chain-confirmed",
+                ghidraEvidence.HandlerChainConfirmed ? "proven" : ghidraEvidence.Available ? "candidate" : "missing",
+                ghidraEvidence.Available
+                    ? $"handlerCell={ghidraEvidence.HandlerCellPointsToWrapper}, wrapperOpd={ghidraEvidence.WrapperOpdPointsToFunction}, branch={ghidraEvidence.WrapperCallsProcessBridge}, rawVptrBaseRefs={ghidraEvidence.RawVptrBaseReferenceCount}"
+                    : "Ghidra xref export not provided",
+                "A Ghidra xref export should confirm the data references and wrapper branch independently of the C export text."),
             new Tf2Ps3SourceCategory5UsercmdHandlerGate(
                 "handler-call-convention-matches-category-5-dispatch-object",
                 callConventionMatches ? "proven" : "missing",
@@ -116,8 +130,10 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
             new Tf2Ps3SourceCategory5UsercmdHandlerGate(
                 "exact-category-5-vptr-write-recovered",
                 exactVptrWriteRecovered ? "proven" : "missing",
-                inferredDispatchBase == 0 ? "unknown" : $"0x{inferredDispatchBase:x8}",
-                "A constructor/object install write for the inferred vptr base is still needed before this is a fully proven vtable binding."),
+                ghidraEvidence.Available
+                    ? $"{(inferredDispatchBase == 0 ? "unknown" : $"0x{inferredDispatchBase:x8}")}; Ghidra raw-word scan found {ghidraEvidence.RawVptrBaseReferenceCount} direct references, so the install is non-literal or indirect"
+                    : inferredDispatchBase == 0 ? "unknown" : $"0x{inferredDispatchBase:x8}",
+                "A constructor/object install write for the inferred vptr base is still needed before this is a fully proven vtable binding. The current Ghidra scan shows this is not a direct raw-word literal."),
             new Tf2Ps3SourceCategory5UsercmdHandlerGate(
                 "native-source-input-ready",
                 "missing",
@@ -133,7 +149,8 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
                 tfElfPath,
                 clcMoveContextPath,
                 clcMoveContractPath,
-                serverDllUsercmdDecoderPath),
+                serverDllUsercmdDecoderPath,
+                ghidraXrefsPath ?? ""),
             new Tf2Ps3SourceCategory5UsercmdHandlerSummary(
                 $"0x{handlerOpd:x8}",
                 $"0x{processBridgeOpd:x8}",
@@ -147,6 +164,9 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
                 clcMoveReadContractRecovered,
                 serverDllUsercmdDecoderRecovered,
                 exactVptrWriteRecovered,
+                ghidraEvidence.Available,
+                ghidraEvidence.HandlerChainConfirmed,
+                ghidraEvidence.RawVptrBaseReferenceCount,
                 false,
                 gates.Count(static gate => gate.Status is "missing" or "candidate")),
             new Tf2Ps3SourceCategory5UsercmdHandlerConsumer(
@@ -178,6 +198,7 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
                 ReadString(serverDllSummary, "CallerEntry"),
                 ReadInt(serverDllSummary, "MaxCommandsPerBatch"),
                 $"0x{ReadFlexibleInt(serverDllSummary, "CUserCmdStrideBytes"):x}"),
+            ghidraEvidence,
             tableSlots,
             gates,
             [
@@ -185,7 +206,9 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
                 "The BLES TF.elf table cell 0180b80c points to OPD 0190cdc8, whose entry is 00a2bd18.",
                 "00a2bd18 subtracts 8 from the dispatch object and calls 00a291c0, matching the 00a2b060 dynamic call object shape iVar9 + 8.",
                 "00a291c0 is the recovered ProcessUsercmds bridge. It consumes CLC_Move command counts and bitstream state, then calls the game client interface.",
-                "The exact constructor/vptr write for inferred base 0180b774 is still not recovered from the current static scan. That is why this report upgrades the handler path but does not mark native Source input ready.",
+                ghidraEvidence.Available
+                    ? "Ghidra confirms the handler table cell and wrapper branch, and also confirms there are no direct raw-word references to inferred base 0180b774. The remaining install proof is therefore an indirect constructor/object write, not a simple literal scan."
+                    : "The exact constructor/vptr write for inferred base 0180b774 is still not recovered from the current static scan. That is why this report upgrades the handler path but does not mark native Source input ready.",
                 "Next implementation work should route markerless category-5 client payloads into the CLC_Move/usercmd decoder and produce server state/snapshot responses from native field contracts, not PCAP byte replay."
             ]);
 
@@ -311,6 +334,135 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
         return tokens.ToArray();
     }
 
+    private static Tf2Ps3SourceCategory5GhidraXrefEvidence BuildGhidraEvidence(JsonElement? root, string? path)
+    {
+        if (root is null)
+        {
+            return new Tf2Ps3SourceCategory5GhidraXrefEvidence(
+                false,
+                path ?? "",
+                false,
+                false,
+                false,
+                0,
+                [],
+                [],
+                [],
+                ["No Ghidra xref export was supplied."]);
+        }
+
+        var value = root.Value;
+        var handlerCell = FindDispatchTableWord(value, "0x0180b80c");
+        var handlerCellPointsToWrapper =
+            ReadString(handlerCell, "rawValue") == "0x0190cdc8"
+            && ReadString(handlerCell, "opdEntry") == "0x00a2bd18";
+
+        var wrapperOpd = FindTarget(value, "0x0190cdc8");
+        var wrapperOpdPointsToFunction =
+            ReadString(wrapperOpd, "dataValue") == "00a2bd18"
+            && StringArray(wrapperOpd, "referencesFrom").Any(static reference => reference.Contains("0190cdc8 -> 00a2bd18", StringComparison.Ordinal));
+
+        var processBridge = FindTarget(value, "0x00a291c0");
+        var processBridgeReferences = StringArray(processBridge, "referencesTo");
+        var wrapperCallsProcessBridge = processBridgeReferences.Any(static reference =>
+            reference.Contains("00a2bd1c -> 00a291c0", StringComparison.Ordinal)
+            && reference.Contains("UNCONDITIONAL_CALL", StringComparison.Ordinal));
+
+        var rawVptrBaseReferences = RawWordAddresses(value, "0x0180b774");
+        var handlerCellReferences = RawWordAddresses(value, "0x0190cdc8");
+
+        return new Tf2Ps3SourceCategory5GhidraXrefEvidence(
+            true,
+            path ?? "",
+            handlerCellPointsToWrapper,
+            wrapperOpdPointsToFunction,
+            wrapperCallsProcessBridge,
+            rawVptrBaseReferences.Length,
+            rawVptrBaseReferences,
+            handlerCellReferences,
+            processBridgeReferences,
+            [
+                handlerCellPointsToWrapper
+                    ? "Ghidra dispatch table data confirms 0180b80c -> 0190cdc8 -> 00a2bd18."
+                    : "Ghidra dispatch table data did not confirm the category-5 wrapper chain.",
+                wrapperCallsProcessBridge
+                    ? "Ghidra code references confirm 00a2bd1c branches to 00a291c0."
+                    : "Ghidra code references did not confirm the wrapper-to-bridge branch.",
+                rawVptrBaseReferences.Length == 0
+                    ? "Ghidra raw-word scan found no direct 0180b774 references; the vptr install is indirect/non-literal."
+                    : $"Ghidra raw-word scan found {rawVptrBaseReferences.Length} direct 0180b774 references."
+            ]);
+    }
+
+    private static JsonElement FindTarget(JsonElement root, string address)
+    {
+        if (!root.TryGetProperty("targets", out var targets) || targets.ValueKind != JsonValueKind.Array)
+        {
+            return default;
+        }
+
+        foreach (var target in targets.EnumerateArray())
+        {
+            if (ReadString(target, "address") == address)
+            {
+                return target;
+            }
+        }
+
+        return default;
+    }
+
+    private static JsonElement FindDispatchTableWord(JsonElement root, string address)
+    {
+        if (!root.TryGetProperty("dispatchTableWords", out var words) || words.ValueKind != JsonValueKind.Array)
+        {
+            return default;
+        }
+
+        foreach (var word in words.EnumerateArray())
+        {
+            if (ReadString(word, "address") == address)
+            {
+                return word;
+            }
+        }
+
+        return default;
+    }
+
+    private static string[] RawWordAddresses(JsonElement root, string value)
+    {
+        if (!root.TryGetProperty("rawWordReferences", out var references) || references.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        foreach (var referenceSet in references.EnumerateArray())
+        {
+            if (ReadString(referenceSet, "value") == value)
+            {
+                return StringArray(referenceSet, "addresses");
+            }
+        }
+
+        return [];
+    }
+
+    private static string[] StringArray(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind == JsonValueKind.Undefined
+            || !element.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return property.EnumerateArray()
+            .Where(static item => item.ValueKind == JsonValueKind.String)
+            .Select(static item => item.GetString() ?? "")
+            .ToArray();
+    }
+
     private static IEnumerable<uint> FindWordReferences(byte[] bytes, uint value)
     {
         var needle = new byte[4];
@@ -400,14 +552,17 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
 
     private static int ReadInt(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Number
+        return element.ValueKind != JsonValueKind.Undefined
+            && element.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.Number
             ? property.GetInt32()
             : 0;
     }
 
     private static int ReadFlexibleInt(JsonElement element, string propertyName)
     {
-        if (!element.TryGetProperty(propertyName, out var property))
+        if (element.ValueKind == JsonValueKind.Undefined
+            || !element.TryGetProperty(propertyName, out var property))
         {
             return 0;
         }
@@ -437,7 +592,9 @@ public static class Tf2Ps3SourceCategory5UsercmdHandlerReducer
 
     private static string ReadString(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+        return element.ValueKind != JsonValueKind.Undefined
+            && element.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? ""
             : "";
     }
@@ -466,6 +623,7 @@ public sealed record Tf2Ps3SourceCategory5UsercmdHandlerReport(
     Tf2Ps3SourceCategory5UsercmdHandlerWrapper HandlerWrapper,
     Tf2Ps3SourceCategory5UsercmdProcessBridge ProcessUsercmdsBridge,
     Tf2Ps3SourceCategory5UsercmdKnownContracts KnownContracts,
+    Tf2Ps3SourceCategory5GhidraXrefEvidence GhidraXrefEvidence,
     Tf2Ps3SourceCategory5UsercmdHandlerTableSlot[] TableNeighborhood,
     Tf2Ps3SourceCategory5UsercmdHandlerGate[] Gates,
     string[] Conclusions);
@@ -475,7 +633,8 @@ public sealed record Tf2Ps3SourceCategory5UsercmdHandlerInputs(
     string TfElf,
     string ClcMoveContext,
     string ClcMoveContract,
-    string ServerDllUsercmdDecoder);
+    string ServerDllUsercmdDecoder,
+    string GhidraXrefs);
 
 public sealed record Tf2Ps3SourceCategory5UsercmdHandlerSummary(
     string HandlerWrapperOpdAddress,
@@ -490,6 +649,9 @@ public sealed record Tf2Ps3SourceCategory5UsercmdHandlerSummary(
     bool ClcMoveReadContractRecovered,
     bool OfficialServerDllUsercmdDecoderRecovered,
     bool ExactCategory5VptrWriteRecovered,
+    bool GhidraXrefReportAvailable,
+    bool GhidraHandlerChainConfirmed,
+    int GhidraRawVptrBaseReferenceCount,
     bool NativeSourceInputReady,
     int OpenGateCount);
 
@@ -525,6 +687,21 @@ public sealed record Tf2Ps3SourceCategory5UsercmdKnownContracts(
     string ServerDllCallerEntry,
     int MaxCommandsPerBatch,
     string CUserCmdStrideBytes);
+
+public sealed record Tf2Ps3SourceCategory5GhidraXrefEvidence(
+    bool Available,
+    string Path,
+    bool HandlerCellPointsToWrapper,
+    bool WrapperOpdPointsToFunction,
+    bool WrapperCallsProcessBridge,
+    int RawVptrBaseReferenceCount,
+    string[] RawVptrBaseReferences,
+    string[] HandlerCellReferences,
+    string[] ProcessBridgeReferences,
+    string[] Conclusions)
+{
+    public bool HandlerChainConfirmed => HandlerCellPointsToWrapper && WrapperOpdPointsToFunction && WrapperCallsProcessBridge;
+}
 
 public sealed record Tf2Ps3SourceCategory5UsercmdHandlerTableSlot(
     string Address,

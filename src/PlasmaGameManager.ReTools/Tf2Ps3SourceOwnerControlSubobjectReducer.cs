@@ -38,7 +38,8 @@ public static class Tf2Ps3SourceOwnerControlSubobjectReducer
         string ownerVtablePath,
         string playerVtablePath,
         string payloadObjectDispatchPath,
-        string outputPath)
+        string outputPath,
+        string? sourceRoot = null)
     {
         var functions = ExtractFunctions(await File.ReadAllLinesAsync(cExportPath))
             .Where(static function => TargetAddresses.Contains(function.Address, StringComparer.Ordinal))
@@ -51,6 +52,7 @@ public static class Tf2Ps3SourceOwnerControlSubobjectReducer
         using var ownerVtableDoc = JsonDocument.Parse(await File.ReadAllTextAsync(ownerVtablePath));
         using var playerVtableDoc = JsonDocument.Parse(await File.ReadAllTextAsync(playerVtablePath));
         using var payloadObjectDoc = JsonDocument.Parse(await File.ReadAllTextAsync(payloadObjectDispatchPath));
+        var implementation = ScanImplementation(sourceRoot);
 
         var ownerTable = FindOwnerTable(ownerVtableDoc.RootElement, "0x0180c81c");
         var ownerSubobjectVptrSlot = FindSlot(ownerTable, "0x000000ec");
@@ -135,17 +137,17 @@ public static class Tf2Ps3SourceOwnerControlSubobjectReducer
                 "The associated-object +0x90 slot candidate resets state then calls +0xac. It is not yet enough to decode all map-load semantics."),
             new Tf2Ps3SourceOwnerControlSubobjectGate(
                 "native-owner-slot8-consumer-implemented",
-                "missing",
-                "server implementation gate",
+                implementation.OwnerSlot8HandlerImplemented ? "proven" : "missing",
+                implementation.OwnerSlot8Evidence,
                 "The native replacement still needs to decode the 00a52720/008722a0 owner-control payload fields and respond semantically."),
             new Tf2Ps3SourceOwnerControlSubobjectGate(
                 "native-associated-slot90-consumer-implemented",
-                "missing",
-                "server implementation gate",
+                implementation.AssociatedSlot90HandlerImplemented ? "proven" : "missing",
+                implementation.AssociatedSlot90Evidence,
                 "The native replacement still needs to implement the associated-object +0x90 consumer semantics, not just identify the slot."),
             new Tf2Ps3SourceOwnerControlSubobjectGate(
                 "native-source-input-ready",
-                "missing",
+                implementation.OwnerSlot8HandlerImplemented && implementation.AssociatedSlot90HandlerImplemented ? "candidate" : "missing",
                 "server/live verification gate",
                 "This remains incomplete until owner/control and associated-object consumers decode live/PCAP uploads and the client reaches map load.")
         };
@@ -165,9 +167,14 @@ public static class Tf2Ps3SourceOwnerControlSubobjectReducer
                 ownerSlot8ForwarderRecovered,
                 associatedSlot90CandidateRecovered,
                 associatedSlotAcSetterRecovered,
-                false,
-                false,
-                false,
+                implementation.OwnerSlot8HandlerImplemented,
+                implementation.AssociatedSlot90HandlerImplemented,
+                payloadObjectDispatchRecovered
+                    && ownerSlot8TargetRecovered
+                    && ownerSlot8ForwarderRecovered
+                    && associatedSlot90CandidateRecovered
+                    && implementation.OwnerSlot8HandlerImplemented
+                    && implementation.AssociatedSlot90HandlerImplemented,
                 gates.Count(static gate => gate.Status is "missing" or "candidate")),
             new Tf2Ps3SourceOwnerControlSubobjectSlotMap(
                 ownerTable.BaseAddress,
@@ -205,6 +212,41 @@ public static class Tf2Ps3SourceOwnerControlSubobjectReducer
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, JsonOptions));
         return report;
+    }
+
+    private static NativePayloadConsumerScan ScanImplementation(string? sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot) || !Directory.Exists(sourceRoot))
+        {
+            return new NativePayloadConsumerScan(
+                false,
+                false,
+                "server implementation source not supplied",
+                "server implementation source not supplied");
+        }
+
+        var text = string.Join('\n', Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}PlasmaGameManager.ReTools{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(File.ReadAllText));
+        var associated =
+            text.Contains("associated-slot90", StringComparison.Ordinal)
+            && text.Contains("Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken", StringComparison.Ordinal)
+            && text.Contains("vtable+0x90", StringComparison.Ordinal);
+        var owner =
+            text.Contains("owner-slot8-control", StringComparison.Ordinal)
+            && text.Contains("OwnerSlot8Bitstream", StringComparison.Ordinal)
+            && text.Contains("00a52720->008722a0", StringComparison.Ordinal);
+        return new NativePayloadConsumerScan(
+            associated,
+            owner,
+            associated
+                ? "GameManagerState.ApplyNativeSourceClcMoveBoundaryContext records associated-slot90 contexts for AssociatedObjectToken payloads."
+                : "associated-slot90 semantic context handler not found",
+            owner
+                ? "GameManagerState.ApplyNativeSourceClcMoveBoundaryContext records owner-slot8-control contexts for OwnerSlot8Bitstream payloads."
+                : "owner-slot8-control semantic context handler not found");
     }
 
     private static Tf2Ps3SourceOwnerControlSubobjectFunction BuildFunction(ExportedFunction function) =>

@@ -34,6 +34,7 @@ public sealed record GameManagerServerEvent(
     string? SourceFragmentHeaderHex = null,
     string? SourcePayloadSemanticKind = null,
     string? SourcePayloadSemanticRole = null,
+    string? SourceNativeFieldSummary = null,
     string? SourceCompactControlFamily = null,
     int? SourceCompactControlPrefixLength = null,
     string? SourceCompactControlPrefixHex = null,
@@ -106,6 +107,13 @@ public sealed record GameManagerServerEvent(
     int? SourceClientCommandWeaponSlotHint = null,
     int? SourceClientCommandTeamHint = null,
     int? SourceClientCommandClassHint = null,
+    string? NativeSourceSemanticContextKind = null,
+    string? NativeSourceSemanticContextDetail = null,
+    int? NativeSourceSemanticContextPacketCount = null,
+    int? NativeSourceSemanticContextSequence = null,
+    string? NativeSourceSemanticContextPayloadRole = null,
+    string? NativeSourceSemanticContextNativeFrameKind = null,
+    long? NativeSourceSemanticContextBodyHash = null,
     int? NativeSourceClientPacketCount = null,
     int? NativeSourceServerPacketCount = null,
     bool? NativeSourceSentInitialSetup = null,
@@ -125,7 +133,8 @@ public sealed record GameManagerServerEvent(
     bool? NativeSourceSentLoadingMotdEvent = null,
     bool? NativeSourceSentRosterDescriptorState = null,
     int? NativeSourceSteadyStateLinkHeartbeatIndex = null,
-    int? NativeSourceLastCommandSnapshotClientPacketCount = null);
+    int? NativeSourceLastCommandSnapshotClientPacketCount = null,
+    int? LocalPort = null);
 
 public sealed class JsonLineGameManagerEventSink : IGameManagerEventSink
 {

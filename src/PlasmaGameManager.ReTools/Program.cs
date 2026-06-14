@@ -11,12 +11,33 @@ switch (command)
     {
         var report = LocalInputSync.Sync(repoRoot);
         Console.WriteLine($"local inputs synced into .local/input: {report.OverallStatus} ({report.Summary.RequiredPresentCount}/{report.Summary.RequiredInputCount} required)");
+        Console.WriteLine($"TF2 PS3 content: {(report.Summary.ContentReady ? "ready" : "partial/missing")} ({report.Summary.RequiredMapPresentCount}/{report.Summary.RequiredMapCount} maps, {report.Summary.RecommendedResourcePresentCount}/{report.Summary.RecommendedResourceCount} resources)");
+        Console.WriteLine($"  content root: {report.Summary.Tf2Ps3SourceContentRoot}");
+        Console.WriteLine($"  map root:     {report.Summary.Tf2Ps3MapRoot}");
         break;
     }
     case "validate-inputs":
     {
         var report = LocalInputSync.ValidateSynced(repoRoot);
         Console.WriteLine($"local input status: {report.OverallStatus} ({report.Summary.RequiredPresentCount}/{report.Summary.RequiredInputCount} required)");
+        Console.WriteLine($"TF2 PS3 content: {(report.Summary.ContentReady ? "ready" : "partial/missing")} ({report.Summary.RequiredMapPresentCount}/{report.Summary.RequiredMapCount} maps, {report.Summary.RecommendedResourcePresentCount}/{report.Summary.RecommendedResourceCount} resources)");
+        Console.WriteLine($"  content root: {report.Summary.Tf2Ps3SourceContentRoot}");
+        Console.WriteLine($"  map root:     {report.Summary.Tf2Ps3MapRoot}");
+        break;
+    }
+    case "validate-tf2ps3-source-content":
+    {
+        var contentRoot = args.Length > 1 ? args[1] : null;
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/tf2ps3-source-content-validation.json");
+        var mapRoot = args.Length > 3 ? args[3] : null;
+        var report = Tf2Ps3SourceContentValidator.Validate(repoRoot, contentRoot, mapRoot);
+        Tf2Ps3SourceContentValidator.WriteReport(output, report);
+        Console.WriteLine($"TF2 PS3 native Source content: {report.OverallStatus} ({report.Summary.RequiredReferencePresentCount}/{report.Summary.RequiredReferenceCount} required references)");
+        Console.WriteLine($"  content root: {report.Summary.ContentRoot}");
+        Console.WriteLine($"  map root:     {report.Summary.MapRoot}");
+        Console.WriteLine($"  generated refs: {report.Summary.GeneratedResourceReferencePresentCount}/{report.Summary.GeneratedResourceReferenceCount} resolved, {report.Summary.VirtualServerOnlyReferenceCount} virtual");
+        Console.WriteLine($"  game events: {report.Summary.LoadedGameEventDescriptorCount} loaded, fallback={report.Summary.UsesFallbackGameEventDescriptors}");
+        Console.WriteLine($"wrote {output}");
         break;
     }
     case "analyze-pcaps":
@@ -256,6 +277,109 @@ SearchActiveFlowClientDone:
         var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-clc-move-boundaries.json");
         await new PcapSourceClcMoveBoundaryAnalyzer().AnalyzeDirectoryAsync(input, output);
         Console.WriteLine($"wrote {output}");
+        break;
+    }
+    case "analyze-source-client-input-coverage":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-client-input-coverage.json");
+        var report = await new PcapSourceClientInputCoverageAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"clientPackets={report.Summary.ClientSourcePacketCount} nativeCovered={report.Summary.NativeCoveredClientPacketCount} hardMarkerless={report.Summary.HardMarkerlessClientPacketCount} unknownHardMarkerless={report.Summary.UnknownHardMarkerlessClientPacketCount} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "analyze-source-client-boundary-probes":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-client-boundary-probes.json");
+        var report = await new PcapSourceClientBoundaryProbeAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} nativeDecoded={report.Summary.NativeDecodedPacketCount} wrapperMatched={report.Summary.WrapperLayoutMatchedPacketCount} noWrapper={report.Summary.NoRecoveredWrapperLayoutPacketCount} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "analyze-markerless-transform-probes-strict":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-markerless-transform-probes-strict.json");
+        var report = await new PcapMarkerlessTransformProbeAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} packetHits={report.Summary.PacketWithStrictTransformHitCount} strictHits={report.Summary.StrictTransformHitCount} nativeReady={report.Summary.NativeMarkerlessTransformReady}");
+        break;
+    }
+    case "analyze-markerless-session-key-probes":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var eaText = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-ea-text-summary.json");
+        var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "artifacts/pcap-markerless-session-key-probes.json");
+        var report = await new PcapMarkerlessSessionKeyProbeAnalyzer().AnalyzeDirectoryAsync(input, eaText, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} keyedPackets={report.Summary.PacketsWithSessionKeys} packetHits={report.Summary.PacketWithAcceptedTransformHitCount} clcHits={report.Summary.ClcMoveHitCount} netHits={report.Summary.NetMessageHitCount} queueHits={report.Summary.QueueDeltaExactHitCount} nativeReady={report.Summary.NativeMarkerlessTransformReady}");
+        break;
+    }
+    case "analyze-source-usercmd-record-candidates":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-usercmd-record-candidates.json");
+        var report = await new PcapSourceUsercmdRecordCandidateAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"recordMultiples={report.Summary.ExactRecordMultiplePacketCount} decoded={report.Summary.NativeDecodedExactRecordMultiplePacketCount} undecoded={report.Summary.UndecodedExactRecordMultiplePacketCount} twoRecord={report.Summary.ExactTwoRecordPacketCount}");
+        break;
+    }
+    case "analyze-source-usercmd-queue-delta-tail":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, "artifacts/pcap-source-usercmd-record-candidates.json");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-usercmd-queue-delta-tail.json");
+        var report = await new PcapSourceUsercmdQueueDeltaTailAnalyzer().AnalyzeAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"candidates={report.Summary.CandidatePacketCount} twoRecord={report.Summary.ExactTwoRecordPacketCount} nonZeroTrailing={report.Summary.DecodedWithNonZeroTrailingPacketCount} fixedTrailerRuledOut={report.Summary.FixedTrailerHypothesisRuledOut} nativeReady={report.Summary.NativeBoundaryReady}");
+        break;
+    }
+    case "analyze-source-payload-object-first-word":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-payload-object-first-word.json");
+        var report = await new PcapSourcePayloadObjectFirstWordAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} ownerSlot8={report.Summary.OwnerSlot8Count} fragments={report.Summary.FragmentedSpecialWrapperCount} repacked={report.Summary.RepackedSpecialWrapperCount} associated={report.Summary.AssociatedObjectTokenCount} distinctAssociated={report.Summary.DistinctAssociatedObjectTokenCount} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "analyze-source-associated-object-tokens":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var contract = args.Length > 2
+            ? args[2]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-token-contract.json");
+        var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "artifacts/pcap-source-associated-object-tokens.json");
+        var report = await new PcapSourceAssociatedObjectTokenAnalyzer().AnalyzeDirectoryAsync(input, contract, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} associated={report.Summary.AssociatedObjectTokenPacketCount} probes={report.Summary.AssociationProbeCount} probeTokenMatches={report.Summary.AssociatedObjectTokenEqualsProbeTokenPacketCount} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "analyze-associated-object-token-transform-probes":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-associated-object-token-transform-probes.json");
+        var report = await new PcapAssociatedObjectTokenTransformProbeAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} associated={report.Summary.AssociatedObjectTokenPacketCount} packetHits={report.Summary.PacketWithAcceptedTransformHitCount} clcHits={report.Summary.ClcMoveHitCount} netHits={report.Summary.NetMessageHitCount} queueHits={report.Summary.QueueDeltaExactHitCount} nativeReady={report.Summary.NativeAssociatedObjectTokenTransformReady}");
+        break;
+    }
+    case "analyze-source-native-association-descriptors":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-source-native-association-descriptors.json");
+        var report = await new PcapSourceNativeAssociationDescriptorScanAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"hardMarkerless={report.Summary.HardMarkerlessPacketCount} beOffset0={report.Summary.BigEndianDescriptorAtOffset0PacketCount} beAny={report.Summary.BigEndianDescriptorAnyOffsetPacketCount} leOffset0={report.Summary.LittleEndianDescriptorAtOffset0PacketCount} leAny={report.Summary.LittleEndianDescriptorAnyOffsetPacketCount} nativeReady={report.Summary.NativeDescriptorBoundaryReady}");
+        break;
+    }
+    case "analyze-embedded-clc-move-candidates":
+    {
+        var input = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-embedded-clc-move-candidates.json");
+        var report = await new PcapEmbeddedClcMoveCandidateAnalyzer().AnalyzeDirectoryAsync(input, output);
+        Console.WriteLine($"wrote {output}");
+        Console.WriteLine($"embedded={report.Summary.EmbeddedCandidateCount} usercmd={report.Summary.UserCommandCandidateCount} hardMarkerless={report.Summary.HardMarkerlessCandidateCount} nativeReady={report.Summary.NativeBoundaryReady}");
         break;
     }
     case "analyze-client-command-worklist":
@@ -566,6 +690,15 @@ SearchActiveFlowClientDone:
         Console.WriteLine($"updated {output}");
         break;
     }
+    case "reduce-tf2ps3-source-reliable-peer-attach":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/source-reliable-peer-attach.json");
+        var report = await Tf2Ps3SourceReliablePeerAttachReducer.ReduceAsync(cExport, output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"attach={report.Summary.AttachChainRecovered} nativeInput={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
     case "reduce-tf2ps3-source-pre-payload-receive":
     {
         var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
@@ -582,9 +715,99 @@ SearchActiveFlowClientDone:
             ? args[2]
             : Path.Combine(repoRoot, "re/tf2ps3/source-pre-payload-receive-boundary.json");
         var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-payload-object-dispatch-map.json");
-        var report = await Tf2Ps3SourcePayloadObjectDispatchReducer.ReduceAsync(cExport, prePayload, output);
+        var sourceRoot = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "src");
+        var report = await Tf2Ps3SourcePayloadObjectDispatchReducer.ReduceAsync(cExport, prePayload, output, sourceRoot);
         Console.WriteLine($"updated {output}");
         Console.WriteLine($"associated={report.Summary.AssociatedSlot90DispatchRecovered} owner={report.Summary.OwnerBitreaderDispatchRecovered} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
+    case "reduce-tf2ps3-source-associated-object-token-contract":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-token-contract.json");
+        var report = await Tf2Ps3SourceAssociatedObjectTokenContractReducer.ReduceAsync(cExport, output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"contractRecovered={report.Summary.AssociatedObjectTokenContractRecovered} slot90={report.Summary.AssociatedSlot90DispatchRecovered} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "reduce-tf2ps3-source-associated-object-slot90":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var playerVtable = args.Length > 2
+            ? args[2]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-player-vtable-map.json");
+        var tokenContract = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-token-contract.json");
+        var output = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-map.json");
+        var registerFunctions = args.Length > 5
+            ? args[5]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-register-functions.json");
+        var callsiteContext = args.Length > 6
+            ? args[6]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-callsite-context.json");
+        var outputBuilderFunctions = args.Length > 7
+            ? args[7]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slotac-output-builder-functions.json");
+        var report = await Tf2Ps3SourceAssociatedObjectSlot90Reducer.ReduceAsync(
+            cExport,
+            playerVtable,
+            tokenContract,
+            output,
+            registerFunctions,
+            callsiteContext,
+            outputBuilderFunctions);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"slot90={report.Summary.Slot90EntryRecovered} slotAc={report.Summary.SlotAcStateTripleRecovered} slotB4={report.Summary.SlotB4DescriptorPredicateRecovered} registers={report.RegisterContract.AssociatedSlot90DispatchRegistersRecovered} outputStates={string.Join(',', report.OutputBuilderRegisterCensus.StateConstants)} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "reduce-tf2ps3-source-associated-slotac-provenance":
+    {
+        var outputBuilderFunctions = args.Length > 1
+            ? args[1]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slotac-output-builder-functions.json");
+        var slot90 = args.Length > 2
+            ? args[2]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-map.json");
+        var output = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-slotac-provenance.json");
+        var report = await Tf2Ps3SourceAssociatedSlotAcProvenanceReducer.ReduceAsync(outputBuilderFunctions, slot90, output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"slotAc={report.Summary.SlotAcCallsiteCount} serverOutput={report.Summary.ProvenServerOutputStateCallsiteCount} clientCandidates={report.Summary.ClientUploadDecoderCandidateCount} nativeReady={report.Summary.NativeSourceInputReady}");
+        break;
+    }
+    case "reduce-tf2ps3-source-associated-lane-role":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var payloadObjectDispatch = args.Length > 2
+            ? args[2]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-payload-object-dispatch-map.json");
+        var slot90 = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-map.json");
+        var slotAcProvenance = args.Length > 4
+            ? args[4]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-slotac-provenance.json");
+        var ownerForwardContext = args.Length > 5
+            ? args[5]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-context-map.json");
+        var category5Usercmd = args.Length > 6
+            ? args[6]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-category5-usercmd-handler-map.json");
+        var output = args.Length > 7
+            ? args[7]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-associated-lane-role.json");
+        var report = await Tf2Ps3SourceAssociatedLaneRoleReducer.ReduceAsync(
+            cExport,
+            payloadObjectDispatch,
+            slot90,
+            slotAcProvenance,
+            ownerForwardContext,
+            category5Usercmd,
+            output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"laneSplit={report.Summary.PayloadDrainLaneSplitRecovered} associatedNotClc={report.Summary.AssociatedLaneRejectedAsClcMoveBoundary} ownerUsercmd={report.Summary.OwnerLaneIsUsercmdRoute} nativeReady={report.Summary.NativeSourceInputReady}");
         break;
     }
     case "reduce-tf2ps3-source-owner-control-subobject":
@@ -600,7 +823,8 @@ SearchActiveFlowClientDone:
             ? args[4]
             : Path.Combine(repoRoot, "re/tf2ps3/source-payload-object-dispatch-map.json");
         var output = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-control-subobject-map.json");
-        var report = await Tf2Ps3SourceOwnerControlSubobjectReducer.ReduceAsync(cExport, ownerVtable, playerVtable, payloadObjectDispatch, output);
+        var sourceRoot = args.Length > 6 ? args[6] : Path.Combine(repoRoot, "src");
+        var report = await Tf2Ps3SourceOwnerControlSubobjectReducer.ReduceAsync(cExport, ownerVtable, playerVtable, payloadObjectDispatch, output, sourceRoot);
         Console.WriteLine($"updated {output}");
         Console.WriteLine($"ownerSlot8={report.Summary.OwnerSlot8TargetRecovered} ownerForwarder={report.Summary.OwnerSlot8ForwarderRecovered} associatedCandidate={report.Summary.AssociatedSlot90CandidateRecovered} openGates={report.Summary.OpenGateCount}");
         break;
@@ -627,9 +851,42 @@ SearchActiveFlowClientDone:
             ? args[3]
             : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-target-map.json");
         var output = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-context-map.json");
-        var report = await Tf2Ps3SourceOwnerForwardContextReducer.ReduceAsync(cExport, ownerVtable, ownerForwardTarget, output);
+        var sourceRoot = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "src");
+        var report = await Tf2Ps3SourceOwnerForwardContextReducer.ReduceAsync(cExport, ownerVtable, ownerForwardTarget, output, sourceRoot);
         Console.WriteLine($"updated {output}");
         Console.WriteLine($"forwarders={report.Summary.OwnerForwarderSlotCount} category5={report.Summary.Category5UsercmdRouteCandidateRecovered} dynamicHandler={report.Summary.Context5PassedToDynamicHandler} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
+    case "reduce-tf2ps3-source-owner-forwarder-bitstream-coverage":
+    {
+        var ownerForwardContext = args.Length > 1
+            ? args[1]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-context-map.json");
+        var sourceRoot = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "src");
+        var output = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forwarder-bitstream-coverage.json");
+        var report = await Tf2Ps3SourceOwnerForwarderBitstreamCoverageReducer.ReduceAsync(
+            ownerForwardContext,
+            sourceRoot,
+            output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"wrapped={report.Summary.ImplementedWrappedForwarderCount}/{report.Summary.WrappedForwarderCount} word5={report.Summary.Word5BoundaryImplemented} word6={report.Summary.Word6BoundaryImplemented} nativeReady={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
+    case "reduce-tf2ps3-source-owner-forward-wrapper-variants":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var sourceRoot = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "src");
+        var output = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-wrapper-variants.json");
+        var report = await Tf2Ps3SourceOwnerForwardWrapperVariantReducer.ReduceAsync(
+            cExport,
+            sourceRoot,
+            output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"wrappers={report.Summary.ShapeRecoveredPrimaryWrapperCount}/{report.Summary.PrimaryWrapperCount} implemented={report.Summary.ImplementedOrNotRequiredWrapperCount}/{report.Summary.PrimaryWrapperCount} thunks={report.Summary.MatchingThunkWrapperCount}/{report.Summary.ThunkWrapperCount} ready={report.Summary.NativeWrapperVariantCoverageReady}");
         break;
     }
     case "reduce-tf2ps3-source-category5-usercmd-handler":
@@ -648,9 +905,39 @@ SearchActiveFlowClientDone:
             ? args[5]
             : Path.Combine(repoRoot, "re/tf2ps3/eatf2-serverdll-usercmd-decoder.json");
         var output = args.Length > 6 ? args[6] : Path.Combine(repoRoot, "re/tf2ps3/source-category5-usercmd-handler-map.json");
-        var report = await Tf2Ps3SourceCategory5UsercmdHandlerReducer.ReduceAsync(cExport, tfElf, clcMoveContext, clcMoveContract, serverDllUsercmdDecoder, output);
+        var ghidraXrefs = args.Length > 7 ? args[7] : Path.Combine(repoRoot, "re/tf2ps3/source-category5-ghidra-xrefs.json");
+        var report = await Tf2Ps3SourceCategory5UsercmdHandlerReducer.ReduceAsync(cExport, tfElf, clcMoveContext, clcMoveContract, serverDllUsercmdDecoder, output, ghidraXrefs);
         Console.WriteLine($"updated {output}");
-        Console.WriteLine($"handlerSlot={report.Summary.HandlerTableCellAddress} wrapper={report.Summary.HandlerWrapperOpdAddress} callConvention={report.Summary.HandlerCallConventionMatchesDispatchObject} vptrWrite={report.Summary.ExactCategory5VptrWriteRecovered} openGates={report.Summary.OpenGateCount}");
+        Console.WriteLine($"handlerSlot={report.Summary.HandlerTableCellAddress} wrapper={report.Summary.HandlerWrapperOpdAddress} callConvention={report.Summary.HandlerCallConventionMatchesDispatchObject} ghidraChain={report.Summary.GhidraHandlerChainConfirmed} vptrWrite={report.Summary.ExactCategory5VptrWriteRecovered} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
+    case "reduce-tf2ps3-source-usercmd-queue-record":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var pcapBoundaryProbe = args.Length > 2
+            ? args[2]
+            : Path.Combine(repoRoot, "artifacts/pcap-source-client-boundary-probes.json");
+        var output = args.Length > 3
+            ? args[3]
+            : Path.Combine(repoRoot, "re/tf2ps3/source-usercmd-queue-record-map.json");
+        var serverDllUsercmdDecoder = args.Length > 4
+            ? args[4]
+            : Path.Combine(repoRoot, "re/tf2ps3/eatf2-serverdll-usercmd-decoder.json");
+        var pcapRecordCandidates = args.Length > 5
+            ? args[5]
+            : Path.Combine(repoRoot, "artifacts/pcap-source-usercmd-record-candidates.json");
+        var tfElfBinary = args.Length > 6
+            ? args[6]
+            : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf");
+        var report = await Tf2Ps3SourceUsercmdQueueRecordReducer.ReduceAsync(
+            cExport,
+            pcapBoundaryProbe,
+            output,
+            serverDllUsercmdDecoder,
+            pcapRecordCandidates,
+            tfElfBinary);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"queueRecord={report.Summary.QueueRecordLayerRecovered} fields={report.Summary.DeltaFieldCount} serverDllCandidates={report.Summary.CandidateServerDllFieldMatchCount} descriptorRefs={report.Summary.QueueInsertDescriptorReferenceCount} queueDeltaExact={report.Summary.TfElfQueueDeltaExactZeroTrailingPacketCount} rawRecordCandidates={report.Summary.PcapRawRecordLengthCandidateCount} nativeReady={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
         break;
     }
     case "reduce-tf2ps3-source-markerless-receive-classifier":
@@ -1007,15 +1294,49 @@ SearchActiveFlowClientDone:
         Console.WriteLine($"connectedRecv={report.Summary.ConnectedRecvWrapperCallerCount} connectedRecvDispatch={report.Summary.ConnectedRecvAndSourceDispatcherFunctionCount} markerlessCandidates={report.Summary.HardMarkerlessRecvBitreaderCandidateCount} nativeReady={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
         break;
     }
+    case "reduce-tf2ps3-source-raw-udp-control-probe":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var pcapInput = args.Length > 2 ? args[2] : Path.Combine(repoRoot, ".local/input/pcaps");
+        var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-raw-udp-control-probe.json");
+        var report = await Tf2Ps3SourceRawUdpControlProbeReducer.ReduceAsync(
+            cExport,
+            pcapInput,
+            output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"probeRecovered={report.Summary.RawUdpControlProbeRecovered} pcap6e01={report.Summary.Pcap6e01ControlProbeCount} excludedFromMarkerless={report.Summary.ExcludedFromHardMarkerlessSourceInputBoundary} nativeReady={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
+    case "reduce-tf2ps3-source-embedded-clc-move-proof":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var embeddedCandidates = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "artifacts/pcap-embedded-clc-move-candidates.json");
+        var ownerDispatch = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-callback-dispatch-map.json");
+        var helperSiblings = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-helper-slice-receive-siblings.json");
+        var recvCensus = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "re/tf2ps3/source-recv-bitreader-census.json");
+        var output = args.Length > 6 ? args[6] : Path.Combine(repoRoot, "re/tf2ps3/source-embedded-clc-move-proof-worklist.json");
+        var report = await Tf2Ps3SourceEmbeddedClcMoveProofReducer.ReduceAsync(
+            cExport,
+            embeddedCandidates,
+            ownerDispatch,
+            helperSiblings,
+            recvCensus,
+            output);
+        Console.WriteLine($"updated {output}");
+        Console.WriteLine($"embedded={report.Summary.EmbeddedCandidateCount} hard={report.Summary.HardMarkerlessCandidateCount} exact={report.Summary.ExactBoundaryCandidateCount} nativeReady={report.Summary.NativeBoundaryReady} openGates={report.Summary.OpenGateCount}");
+        break;
+    }
     case "reduce-tf2ps3-source-markerless-param2-builder":
     {
         var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
         var recvCensus = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/source-recv-bitreader-census.json");
         var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-markerless-param2-builder.json");
+        var implementationRoot = args.Length > 4 ? args[4] : repoRoot;
         var report = await Tf2Ps3SourceMarkerlessParam2BuilderReducer.ReduceAsync(
             cExport,
             recvCensus,
-            output);
+            output,
+            implementationRoot);
         Console.WriteLine($"updated {output}");
         Console.WriteLine($"builder={report.Summary.PayloadObjectBuilderRecovered} recvFill={report.Summary.MarkerlessRecvFillRecovered} fragment={report.Summary.FragmentReassemblyRecovered} drain={report.Summary.DrainDispatchLoopRecovered} boundary={report.Summary.ConcretePayloadObjectBoundaryRecovered} nativeReady={report.Summary.NativeSourceInputReady} openGates={report.Summary.OpenGateCount}");
         break;
@@ -1143,6 +1464,54 @@ SearchActiveFlowClientDone:
         Console.WriteLine($"updated {output}");
         break;
     }
+    case "reduce-tf2ps3-native-source-lifecycle":
+    {
+        var tfElf = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf");
+        var officialServerDll = args.Length > 2 ? args[2] : Path.Combine(repoRoot, ".local/input/EATF2ServerDLL/server.dll");
+        var nativeMessageContract = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-native-message-contract.json");
+        var packetEntitiesPlacement = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-packet-entities-placement-map.json");
+        var loadingReplacementPlan = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "re/tf2ps3/source-loading-replacement-plan.json");
+        var output = args.Length > 6 ? args[6] : Path.Combine(repoRoot, "re/tf2ps3/native-source-lifecycle-contract.json");
+        await Tf2Ps3NativeSourceLifecycleReducer.ReduceAsync(
+            tfElf,
+            officialServerDll,
+            nativeMessageContract,
+            packetEntitiesPlacement,
+            loadingReplacementPlan,
+            output);
+        Console.WriteLine($"updated {output}");
+        break;
+    }
+    case "reduce-tf2ps3-source-server-replacement-contract":
+    {
+        var nativeLifecycle = args.Length > 1 ? args[1] : Path.Combine(repoRoot, "re/tf2ps3/native-source-lifecycle-contract.json");
+        var serverDllRuntime = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/eatf2-serverdll-runtime-contract.json");
+        var serverDllObligations = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/eatf2-serverdll-native-obligations.json");
+        var nativeMessageContract = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-native-message-contract.json");
+        var objectStreamBootstrap = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "re/tf2ps3/source-object-stream-bootstrap-map.json");
+        var queuedPrefixContract = args.Length > 6 ? args[6] : Path.Combine(repoRoot, "re/tf2ps3/source-queued-prefix-contract.json");
+        var loadingReplacementPlan = args.Length > 7 ? args[7] : Path.Combine(repoRoot, "re/tf2ps3/source-loading-replacement-plan.json");
+        var responderSource = args.Length > 8 ? args[8] : Path.Combine(repoRoot, "src/PlasmaGameManager.Server/Ps3NativeSourceResponder.cs");
+        var output = args.Length > 9 ? args[9] : Path.Combine(repoRoot, "re/tf2ps3/source-server-replacement-contract.json");
+        var generatedPrefixRetailCrossmap = args.Length > 10 ? args[10] : Path.Combine(repoRoot, "re/tf2ps3/source-generated-prefix-retail-crossmap.json");
+        var userCmdPhysicsAudit = args.Length > 11 ? args[11] : Path.Combine(repoRoot, "re/tf2ps3/eatf2-serverdll-usercmd-physics-audit.json");
+        var sourceSendCallsiteMap = args.Length > 12 ? args[12] : Path.Combine(repoRoot, "re/tf2ps3/source-send-callsite-map.json");
+        await Tf2Ps3SourceServerReplacementContractReducer.ReduceAsync(
+            nativeLifecycle,
+            serverDllRuntime,
+            serverDllObligations,
+            nativeMessageContract,
+            objectStreamBootstrap,
+            queuedPrefixContract,
+            loadingReplacementPlan,
+            responderSource,
+            output,
+            generatedPrefixRetailCrossmap,
+            userCmdPhysicsAudit,
+            sourceSendCallsiteMap);
+        Console.WriteLine($"updated {output}");
+        break;
+    }
     case "reduce-tf2ps3-source-queued-peer-targets":
     {
         var peerChannelMap = args.Length > 1 ? args[1] : Path.Combine(repoRoot, "re/tf2ps3/source-peer-channel-map.json");
@@ -1217,10 +1586,24 @@ SearchActiveFlowClientDone:
         var semanticTraceDirectory = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "docs");
         var queuedOpaqueReport = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "artifacts/pcap-source-queued-peer-opaque.json");
         var output = args.Length > 4 ? args[4] : Path.Combine(repoRoot, "re/tf2ps3/source-generated-prefix-retail-crossmap.json");
+        var sourceLoadingFrameDebt = args.Length > 5 ? args[5] : Path.Combine(repoRoot, "re/tf2ps3/source-loading-frame-debt.json");
         await Tf2Ps3SourceGeneratedPrefixRetailCrossmapReducer.ReduceAsync(
             queuedPrefixContract,
             semanticTraceDirectory,
             queuedOpaqueReport,
+            output,
+            sourceLoadingFrameDebt);
+        Console.WriteLine($"updated {output}");
+        break;
+    }
+    case "reduce-tf2ps3-source-generated-prefix-field-probe":
+    {
+        var generatedPrefixRetailCrossmap = args.Length > 1 ? args[1] : Path.Combine(repoRoot, "re/tf2ps3/source-generated-prefix-retail-crossmap.json");
+        var semanticTraceDirectory = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "docs");
+        var output = args.Length > 3 ? args[3] : Path.Combine(repoRoot, "re/tf2ps3/source-generated-prefix-field-probe.json");
+        await Tf2Ps3SourceGeneratedPrefixFieldProbeReducer.ReduceAsync(
+            generatedPrefixRetailCrossmap,
+            semanticTraceDirectory,
             output);
         Console.WriteLine($"updated {output}");
         break;
@@ -1380,6 +1763,30 @@ SearchActiveFlowClientDone:
         var sourcePayloadObjectDispatch = args.Length > 18 ? args[18] : Path.Combine(repoRoot, "re/tf2ps3/source-payload-object-dispatch-map.json");
         var sourceOwnerControlSubobject = args.Length > 19 ? args[19] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-control-subobject-map.json");
         var sourceOwnerForwardContext = args.Length > 20 ? args[20] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-context-map.json");
+        var sourceOwnerForwarderBitstreamCoverage = args.Length > 21 ? args[21] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forwarder-bitstream-coverage.json");
+        var sourceOwnerForwardWrapperVariants = args.Length > 22 ? args[22] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-forward-wrapper-variants.json");
+        var sourceCategory5UsercmdHandler = args.Length > 23 ? args[23] : Path.Combine(repoRoot, "re/tf2ps3/source-category5-usercmd-handler-map.json");
+        var sourceClientInputCoverage = args.Length > 24 ? args[24] : Path.Combine(repoRoot, "artifacts/pcap-source-client-input-coverage.json");
+        var sourceClientBoundaryProbe = args.Length > 25 ? args[25] : Path.Combine(repoRoot, "artifacts/pcap-source-client-boundary-probes.json");
+        var sourceMarkerlessTransformProbe = args.Length > 26 ? args[26] : Path.Combine(repoRoot, "artifacts/pcap-markerless-transform-probes-strict.json");
+        var sourceUsercmdQueueRecord = args.Length > 27 ? args[27] : Path.Combine(repoRoot, "re/tf2ps3/source-usercmd-queue-record-map.json");
+        var sourceOwnerCallbackDispatch = args.Length > 28 ? args[28] : Path.Combine(repoRoot, "re/tf2ps3/source-owner-callback-dispatch-map.json");
+        var sourceHelperSliceReceiveSiblings = args.Length > 29 ? args[29] : Path.Combine(repoRoot, "re/tf2ps3/source-helper-slice-receive-siblings.json");
+        var sourceRecvBitreaderCensus = args.Length > 30 ? args[30] : Path.Combine(repoRoot, "re/tf2ps3/source-recv-bitreader-census.json");
+        var sourceEmbeddedClcMoveCandidates = args.Length > 31 ? args[31] : Path.Combine(repoRoot, "artifacts/pcap-embedded-clc-move-candidates.json");
+        var sourceMarkerlessSessionKeyProbe = args.Length > 32 ? args[32] : Path.Combine(repoRoot, "artifacts/pcap-markerless-session-key-probes.json");
+        var sourceContentValidation = args.Length > 33 ? args[33] : Path.Combine(repoRoot, "artifacts/tf2ps3-source-content-validation.json");
+        var sourceUsercmdQueueDeltaTail = args.Length > 34 ? args[34] : Path.Combine(repoRoot, "artifacts/pcap-source-usercmd-queue-delta-tail.json");
+        var sourceRawUdpControlProbe = args.Length > 35 ? args[35] : Path.Combine(repoRoot, "re/tf2ps3/source-raw-udp-control-probe.json");
+        var sourcePayloadObjectFirstWord = args.Length > 36 ? args[36] : Path.Combine(repoRoot, "artifacts/pcap-source-payload-object-first-word.json");
+        var sourceNativeAssociationDescriptorScan = args.Length > 37 ? args[37] : Path.Combine(repoRoot, "artifacts/pcap-source-native-association-descriptors.json");
+        var sourceAssociatedObjectTokenContract = args.Length > 38 ? args[38] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-token-contract.json");
+        var pcapSourceAssociatedObjectTokens = args.Length > 39 ? args[39] : Path.Combine(repoRoot, "artifacts/pcap-source-associated-object-tokens.json");
+        var sourceAssociatedObjectSlot90 = args.Length > 40 ? args[40] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-object-slot90-map.json");
+        var associatedObjectTokenTransformProbe = args.Length > 41 ? args[41] : Path.Combine(repoRoot, "artifacts/pcap-associated-object-token-transform-probes.json");
+        var sourceReliablePeerAttach = args.Length > 42 ? args[42] : Path.Combine(repoRoot, "re/tf2ps3/source-reliable-peer-attach.json");
+        var sourceAssociatedSlotAcProvenance = args.Length > 43 ? args[43] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-slotac-provenance.json");
+        var sourceAssociatedLaneRole = args.Length > 44 ? args[44] : Path.Combine(repoRoot, "re/tf2ps3/source-associated-lane-role.json");
         await NativeAcceptanceGateReducer.ReduceAsync(
             bfbc2Dispatcher,
             tf2Dispatcher,
@@ -1400,7 +1807,31 @@ SearchActiveFlowClientDone:
             sourceMarkerlessParam2Builder,
             sourcePayloadObjectDispatch,
             sourceOwnerControlSubobject,
-            sourceOwnerForwardContext);
+            sourceOwnerForwardContext,
+            sourceOwnerForwarderBitstreamCoverage,
+            sourceOwnerForwardWrapperVariants,
+            sourceCategory5UsercmdHandler,
+            sourceClientInputCoverage,
+            sourceClientBoundaryProbe,
+            sourceMarkerlessTransformProbe,
+            sourceUsercmdQueueRecord,
+            sourceOwnerCallbackDispatch,
+            sourceHelperSliceReceiveSiblings,
+            sourceRecvBitreaderCensus,
+            sourceEmbeddedClcMoveCandidates,
+            sourceMarkerlessSessionKeyProbe,
+            sourceContentValidation,
+            sourceUsercmdQueueDeltaTail,
+            sourceRawUdpControlProbe,
+            sourcePayloadObjectFirstWord,
+            sourceNativeAssociationDescriptorScan,
+            sourceAssociatedObjectTokenContract,
+            pcapSourceAssociatedObjectTokens,
+            sourceAssociatedObjectSlot90,
+            associatedObjectTokenTransformProbe,
+            sourceReliablePeerAttach,
+            sourceAssociatedSlotAcProvenance,
+            sourceAssociatedLaneRole);
         Console.WriteLine($"updated {output}");
         break;
     }
@@ -1775,7 +2206,16 @@ SearchActiveFlowClientDone:
     {
         var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
         var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/source-payload-builder-map.json");
-        await Tf2Ps3SourcePayloadBuilderReducer.ReduceAsync(cExport, output);
+        var elf = args.Length > 3 ? args[3] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf");
+        await Tf2Ps3SourcePayloadBuilderReducer.ReduceAsync(cExport, output, elf);
+        Console.WriteLine($"updated {output}");
+        break;
+    }
+    case "reduce-tf2ps3-source-send-callsite-map":
+    {
+        var cExport = args.Length > 1 ? args[1] : Path.Combine(repoRoot, ".local/input/TF2PS3/TF.elf.c");
+        var output = args.Length > 2 ? args[2] : Path.Combine(repoRoot, "re/tf2ps3/source-send-callsite-map.json");
+        await Tf2Ps3SourceSendCallsiteMapReducer.ReduceAsync(cExport, output);
         Console.WriteLine($"updated {output}");
         break;
     }
@@ -1795,6 +2235,7 @@ SearchActiveFlowClientDone:
             Usage:
               PlasmaGameManager.ReTools sync-inputs
               PlasmaGameManager.ReTools validate-inputs
+              PlasmaGameManager.ReTools validate-tf2ps3-source-content [content-root] [output-json] [map-root]
               PlasmaGameManager.ReTools analyze-pcaps [input-dir] [output-json] [tf2-dispatcher-map-json]
               PlasmaGameManager.ReTools analyze-pcap-corpus [input-dir] [output-json] [tf2-dispatcher-map-json]
               PlasmaGameManager.ReTools analyze-ea-text-pcaps [input-dir] [output-json]
@@ -1815,6 +2256,17 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools analyze-source-transport [input-dir] [output-json]
               PlasmaGameManager.ReTools analyze-source-transport-fields [input-dir] [output-json]
               PlasmaGameManager.ReTools analyze-source-clc-move-boundaries [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-source-client-input-coverage [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-source-client-boundary-probes [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-markerless-transform-probes-strict [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-markerless-session-key-probes [input-dir] [pcap-ea-text-summary-json] [output-json]
+              PlasmaGameManager.ReTools analyze-source-usercmd-record-candidates [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-source-usercmd-queue-delta-tail [pcap-source-usercmd-record-candidates-json] [output-json]
+              PlasmaGameManager.ReTools analyze-source-payload-object-first-word [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-source-associated-object-tokens [input-dir] [associated-object-contract-json] [output-json]
+              PlasmaGameManager.ReTools analyze-associated-object-token-transform-probes [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-source-native-association-descriptors [input-dir] [output-json]
+              PlasmaGameManager.ReTools analyze-embedded-clc-move-candidates [input-dir] [output-json]
               PlasmaGameManager.ReTools analyze-client-command-worklist [input-dir] [output-json]
               PlasmaGameManager.ReTools analyze-opaque-markerless-command-wrapper [input-dir] [output-json]
               PlasmaGameManager.ReTools analyze-markerless-boundary-hypotheses [input-dir] [client-worklist-json] [opaque-markerless-json] [udp-ingress-json] [serverdll-tunnel-json] [serverdll-usercmd-decoder-json] [output-json]
@@ -1828,6 +2280,7 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools reduce-tf2ps3-source-field-contract [source-payload-builder-map-json] [pcap-source-embedded-objects-json] [pcap-source-gameplay-phases-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-snapshot-path [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-snapshot-delta [tf-elf-c-export] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-reliable-peer-attach [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools analyze-live-handoff [gamemanager-events-jsonl] [output-json] [source-log-or-pcap ...]
               PlasmaGameManager.ReTools match-live-source-turns [gamemanager-events-jsonl] [turn-contract-json] [output-json]
               PlasmaGameManager.ReTools compare-live-frozen-state-retail [gamemanager-events-jsonl] [pcap-frozen-state-turns-json] [output-json]
@@ -1842,7 +2295,7 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools reduce-eatf2-serverdll-usercmd-decoder [target-functions-json] [usercmd-layout-json] [output-json]
               PlasmaGameManager.ReTools reduce-eatf2-serverdll-usercmd-physics-audit [runtime-contract-json] [source-root] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-clc-move-contract [ghidra-context-json] [source-engine-root] [output-json]
-              PlasmaGameManager.ReTools reduce-acceptance-gates [bfbc2-dispatcher-json] [tf2-dispatcher-json] [pcap-corpus-json] [output-json] [live-handoff-evidence-json] [source-bridge-contract-json] [pcap-ea-text-json] [source-gameplay-phases-json] [gamemanager-hello-json] [eatf2-serverdll-simulation-json] [eatf2-serverdll-native-obligations-json] [source-loading-frame-debt-json] [source-connected-wrapper-boundary-json] [source-slot70-param2-builder-json] [source-slot70-param2-field-contract-json] [source-bitstream-helper-contract-json] [source-markerless-param2-builder-json] [source-payload-object-dispatch-json] [source-owner-control-subobject-json] [source-owner-forward-context-json]
+              PlasmaGameManager.ReTools reduce-acceptance-gates [bfbc2-dispatcher-json] [tf2-dispatcher-json] [pcap-corpus-json] [output-json] [live-handoff-evidence-json] [source-bridge-contract-json] [pcap-ea-text-json] [source-gameplay-phases-json] [gamemanager-hello-json] [eatf2-serverdll-simulation-json] [eatf2-serverdll-native-obligations-json] [source-loading-frame-debt-json] [source-connected-wrapper-boundary-json] [source-slot70-param2-builder-json] [source-slot70-param2-field-contract-json] [source-bitstream-helper-contract-json] [source-markerless-param2-builder-json] [source-payload-object-dispatch-json] [source-owner-control-subobject-json] [source-owner-forward-context-json] [source-owner-forwarder-bitstream-coverage-json] [source-owner-forward-wrapper-variants-json] [source-category5-usercmd-handler-json] [pcap-source-client-input-coverage-json] [pcap-source-client-boundary-probes-json] [pcap-markerless-transform-probes-strict-json] [source-usercmd-queue-record-json] [source-owner-callback-dispatch-json] [source-helper-slice-receive-siblings-json] [source-recv-bitreader-census-json] [pcap-embedded-clc-move-candidates-json] [pcap-markerless-session-key-probes-json] [tf2ps3-source-content-validation-json] [pcap-source-usercmd-queue-delta-tail-json] [source-raw-udp-control-probe-json] [pcap-source-payload-object-first-word-json] [pcap-source-native-association-descriptors-json] [source-associated-object-token-contract-json] [pcap-source-associated-object-tokens-json] [source-associated-object-slot90-json] [pcap-associated-object-token-transform-probes-json] [source-reliable-peer-attach-json] [source-associated-slotac-provenance-json] [source-associated-lane-role-json]
               PlasmaGameManager.ReTools rebuild-native-reports [output-json] [--continue-on-failure]
               PlasmaGameManager.ReTools bfbc2-log-evidence [input-log] [output-json]
               PlasmaGameManager.ReTools reduce-bfbc2-evidence [evidence-json] [report-dir]
@@ -1874,15 +2327,23 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools reduce-tf2ps3-unresolved-function-context [function-context-json] [unresolved-targets-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-network-anchors [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-payload-builders [tf-elf-c-export] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-send-callsite-map [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-snapshot-path [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-snapshot-delta [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-receive-path [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-pre-payload-receive [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-payload-object-dispatch [tf-elf-c-export] [source-pre-payload-receive-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-associated-object-token-contract [tf-elf-c-export] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-associated-object-slot90 [tf-elf-c-export] [source-player-vtable-json] [source-associated-object-token-contract-json] [output-json] [slot90-register-functions-json] [slot90-callsite-context-json] [slotac-output-builder-functions-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-associated-slotac-provenance [slotac-output-builder-functions-json] [source-associated-object-slot90-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-associated-lane-role [tf-elf-c-export] [source-payload-object-dispatch-json] [source-associated-object-slot90-json] [source-associated-slotac-provenance-json] [source-owner-forward-context-json] [source-category5-usercmd-handler-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-control-subobject [tf-elf-c-export] [source-owner-vtable-json] [source-player-vtable-json] [source-payload-object-dispatch-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-forward-target [tf-elf-c-export] [source-owner-control-subobject-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-forward-context [tf-elf-c-export] [source-owner-vtable-json] [source-owner-forward-target-json] [output-json]
-              PlasmaGameManager.ReTools reduce-tf2ps3-source-category5-usercmd-handler [tf-elf-c-export] [tf-elf-binary] [source-clc-move-context-json] [source-clc-move-contract-json] [eatf2-serverdll-usercmd-decoder-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-forwarder-bitstream-coverage [source-owner-forward-context-json] [source-root] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-forward-wrapper-variants [tf-elf-c-export] [source-root] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-category5-usercmd-handler [tf-elf-c-export] [tf-elf-binary] [source-clc-move-context-json] [source-clc-move-contract-json] [eatf2-serverdll-usercmd-decoder-json] [output-json] [ghidra-xrefs-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-usercmd-queue-record [tf-elf-c-export] [pcap-source-client-boundary-probes-json] [output-json] [eatf2-serverdll-usercmd-decoder-json] [pcap-source-usercmd-record-candidates-json] [tf-elf-binary]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-markerless-receive-classifier [pcap-opaque-markerless-command-wrapper-json] [source-receive-path-json] [source-native-message-contract-json] [source-clc-move-contract-json] [source-netchan-registration-setup-json] [source-required-handler-table-toc-function-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-markerless-transform-candidates [tf-elf-c-export] [source-markerless-receive-classifier-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-client-receive-contract [source-receive-path-json] [source-helper-slice-contract-json] [source-markerless-receive-classifier-json] [source-markerless-transform-candidates-json] [output-json]
@@ -1908,7 +2369,9 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-callback-dispatch [tf-elf-c-export] [owner-callback-map-json] [slot70-param2-field-contract-json] [markerless-dataflow-targets-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-helper-slice-receive-siblings [tf-elf-c-export] [source-helper-slice-contract-json] [source-slot70-param2-builder-json] [source-owner-callback-dispatch-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-recv-bitreader-census [tf-elf-c-export] [source-connected-wrapper-boundary-json] [source-helper-slice-receive-siblings-json] [pcap-markerless-boundary-hypotheses-json] [output-json]
-              PlasmaGameManager.ReTools reduce-tf2ps3-source-markerless-param2-builder [tf-elf-c-export] [source-recv-bitreader-census-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-raw-udp-control-probe [tf-elf-c-export] [pcap-input] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-embedded-clc-move-proof [tf-elf-c-export] [pcap-embedded-clc-move-candidates-json] [source-owner-callback-dispatch-json] [source-helper-slice-receive-siblings-json] [source-recv-bitreader-census-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-markerless-param2-builder [tf-elf-c-export] [source-recv-bitreader-census-json] [output-json] [implementation-root]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-owner-vtables [tf-elf] [tf-elf-c-export] [opd-refs-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-helper-slice-contract [tf-elf] [tf-elf-c-export] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-netchan-static-anchor [tf-elf] [output-json]
@@ -1919,12 +2382,15 @@ SearchActiveFlowClientDone:
               PlasmaGameManager.ReTools reduce-tf2ps3-source-critical-bootstrap-route [tf-elf-c-export] [source-critical-message-io-contract-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-packet-entities-placement [source-critical-bootstrap-route-json] [source-snapshot-path-json] [source-snapshot-delta-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-native-message-contract [source-message-vtable-catalog-json] [source-critical-message-io-contract-json] [source-clc-move-contract-json] [source-bootstrap-control-message-map-json] [source-packet-entities-placement-map-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-server-replacement-contract [native-source-lifecycle-json] [eatf2-serverdll-runtime-contract-json] [eatf2-serverdll-native-obligations-json] [source-native-message-contract-json] [source-object-stream-bootstrap-json] [source-queued-prefix-contract-json] [source-loading-replacement-plan-json] [ps3-native-source-responder-cs] [output-json] [source-generated-prefix-retail-crossmap-json] [eatf2-serverdll-usercmd-physics-audit-json] [source-send-callsite-map-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-queued-peer-targets [source-peer-channel-map-json] [source-critical-bootstrap-route-map-json] [source-object-stream-bootstrap-map-json] [pcap-source-queued-peer-opaque-json] [eatf2-serverdll-tunnel-ghidra-map-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-native-template-debt [ps3-native-source-responder-cs] [source-queued-peer-target-map-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-template-patch-layout [ps3-native-source-responder-cs] [source-native-template-debt-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-state-link-grammar [source-template-patch-layout-json] [pcap-source-embedded-objects-json] [pcap-source-queued-peer-opaque-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-embedded-object-grammar [pcap-source-embedded-objects-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-queued-prefix-contract [source-queued-peer-target-map-json] [pcap-source-queued-peer-opaque-json] [source-template-patch-layout-json] [source-state-link-grammar-json] [source-embedded-object-grammar-json] [eatf2-serverdll-tunnel-ghidra-map-json] [output-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-generated-prefix-retail-crossmap [source-queued-prefix-contract-json] [semantic-trace-directory] [pcap-source-queued-peer-opaque-json] [output-json] [source-loading-frame-debt-json]
+              PlasmaGameManager.ReTools reduce-tf2ps3-source-generated-prefix-field-probe [source-generated-prefix-retail-crossmap-json] [semantic-trace-directory] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-native-debt-priority [source-native-template-debt-json] [source-template-patch-layout-json] [source-queued-prefix-contract-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-loading-frame-debt [ps3-native-source-responder-cs] [source-native-template-debt-json] [source-queued-prefix-contract-json] [eatf2-serverdll-tunnel-ghidra-map-json] [output-json]
               PlasmaGameManager.ReTools reduce-tf2ps3-source-loading-replacement-plan [source-loading-frame-debt-json] [source-queued-prefix-contract-json] [source-queued-peer-target-map-json] [source-critical-message-io-contract-json] [source-object-stream-bootstrap-map-json] [source-snapshot-path-map-json] [source-native-message-contract-json] [output-json]

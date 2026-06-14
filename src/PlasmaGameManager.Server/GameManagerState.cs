@@ -70,6 +70,7 @@ public sealed class GameManagerSession
         AdvertisedPort = options.AdvertisedPort;
         NativeRankedStatsExportPath = options.NativeRankedStatsExportPath;
         MapMetadataPath = options.MapMetadataPath;
+        NativeSourceContentRootPath = options.NativeSourceContentRootPath;
         MapMetadataCatalog = Tf2MapMetadataCatalog.LoadFromJsonFile(MapMetadataPath);
         InitializeSourceCvars();
         InitializeSourceConfigDirectories();
@@ -154,6 +155,8 @@ public sealed class GameManagerSession
 
     public Tf2MapMetadata? CurrentMapMetadata => MapMetadataCatalog.Find(MapName);
 
+    public string NativeSourceContentRootPath { get; private set; } = "";
+
     public Dictionary<string, string> SourceCvars { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<string> SourceConfigDirectories { get; } = [];
@@ -224,7 +227,8 @@ public sealed class GameManagerSession
             AdvertisedHost,
             AdvertisedPort,
             NativeRankedStatsExportPath,
-            MapMetadataPath));
+            MapMetadataPath,
+            NativeSourceContentRootPath));
 
         LocalId = options.LocalId;
         GameId = options.GameId;
@@ -249,6 +253,7 @@ public sealed class GameManagerSession
         AdvertisedPort = options.AdvertisedPort;
         NativeRankedStatsExportPath = options.NativeRankedStatsExportPath;
         MapMetadataPath = options.MapMetadataPath;
+        NativeSourceContentRootPath = options.NativeSourceContentRootPath;
         var mapChanged = !string.Equals(oldMapName, MapName, StringComparison.OrdinalIgnoreCase);
         if (mapChanged && sourceLevelWasRunning)
         {
@@ -484,11 +489,23 @@ public sealed class GameManagerSession
         }
 
         var builder = new StringBuilder(Math.Min(trimmed.Length, 31));
+        var alphaNumericCount = 0;
+        var replacementCount = 0;
         foreach (var ch in trimmed)
         {
-            if (char.IsControl(ch))
+            if (char.IsControl(ch) || ch < 0x20 || ch > 0x7e)
             {
                 continue;
+            }
+
+            if (ch == '?')
+            {
+                replacementCount++;
+            }
+
+            if (char.IsLetterOrDigit(ch) || ch is '_' or '-' or '[' or ']' or '(' or ')' or ' ')
+            {
+                alphaNumericCount++;
             }
 
             builder.Append(ch);
@@ -498,7 +515,21 @@ public sealed class GameManagerSession
             }
         }
 
-        return builder.ToString().Trim();
+        var normalized = builder.ToString().Trim();
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        // ClientInfo/StringCmd decoding can false-positive on markerless binary
+        // source packets. Do not let those bytes replace the roster/player name.
+        if (alphaNumericCount < Math.Max(2, normalized.Length / 2)
+            || replacementCount > Math.Max(0, normalized.Length / 4))
+        {
+            return "";
+        }
+
+        return normalized;
     }
 
     private static IReadOnlyList<string> TokenizeNativeClientCommand(string command)
@@ -1438,7 +1469,8 @@ public sealed record GameManagerSessionOptions(
     string AdvertisedHost = "127.0.0.1",
     int AdvertisedPort = 27015,
     string NativeRankedStatsExportPath = "",
-    string MapMetadataPath = "")
+    string MapMetadataPath = "",
+    string NativeSourceContentRootPath = "")
 {
     public static GameManagerSessionOptions Default { get; } = new();
 }
@@ -1506,6 +1538,12 @@ public sealed class Ps3NativeSourceResponderState
 
     public bool SentCriticalSourceNetMessageBootstrap { get; set; }
 
+    public bool SentQuickMatchSetupContinuation { get; set; }
+
+    public bool SawInitialClientFrozenStateUpload { get; set; }
+
+    public bool PendingInitialClientFrozenStateUpload { get; set; }
+
     public bool SentObjectState { get; set; }
 
     public int ObjectStateIntroBatchIndex { get; set; }
@@ -1538,6 +1576,8 @@ public sealed class Ps3NativeSourceResponderState
 
     public bool SentPostRosterFrozenStateBatches { get; set; }
 
+    public bool WaitingForPostRosterFrozenStateContinuation { get; set; }
+
     public bool SentPostRosterMapLoadClientBatchAck { get; set; }
 
     public bool SentPostRosterShortGameplayAck { get; set; }
@@ -1551,6 +1591,8 @@ public sealed class Ps3NativeSourceResponderState
     public bool SentQuickMatchTerminalMapLoad { get; set; }
 
     public int QuickMatchTerminalPromptStage { get; set; }
+
+    public int QuickMatchTerminalPrompt1WaitClientPacketCount { get; set; }
 
     public int LateLargeCommandFollowupClientPacketCount { get; set; }
 
@@ -1651,6 +1693,13 @@ public sealed class Tf2SourcePlayerState
     private const uint SourceFlagInWater = 1U << 9;
 
     private const uint WorldGroundEntityHandle = 0;
+
+    public Tf2SourcePlayerState()
+    {
+        ModelIndex = Tf2Ps3SourceCatalog.PlayerModelPrecacheIndexForClass(ClassNumber);
+        WeaponViewModelIndex = Tf2Ps3SourceCatalog.WeaponViewModelPrecacheIndexForClass(ClassNumber);
+        WeaponWorldModelIndex = Tf2Ps3SourceCatalog.WeaponWorldModelPrecacheIndexForClass(ClassNumber);
+    }
 
     public uint RootObjectId { get; set; } = DefaultRootObjectId;
 
@@ -1873,6 +1922,24 @@ public sealed class Tf2SourcePlayerState
 
     public byte WaterLevel { get; set; }
 
+    public string LastTouchedMapVolumeClass { get; private set; } = "";
+
+    public string LastTouchedMapVolumeTarget { get; private set; } = "";
+
+    public byte InRespawnRoom { get; private set; }
+
+    public byte InRegenerationVolume { get; private set; }
+
+    public byte InNoBuildVolume { get; private set; }
+
+    public byte InCaptureArea { get; private set; }
+
+    public byte InHurtVolume { get; private set; }
+
+    public byte InSolidMapBrush { get; private set; }
+
+    public ushort LastHurtVolumeDamage { get; private set; }
+
     public float LaggedMovementValue { get; set; } = 1;
 
     public byte Ducked { get; set; }
@@ -2018,6 +2085,10 @@ public sealed class Tf2SourcePlayerState
     public float SimulationTime { get; private set; }
 
     public uint TickBase { get; private set; }
+
+    public uint LastPhysicsSimulationTick { get; private set; }
+
+    public uint PhysicsSimulateTickGate { get; private set; } = OfficialEatf2ServerDllContracts.PhysicsSimulateTickGateOffset;
 
     public float NextPrimaryAttack { get; private set; }
 
@@ -2191,7 +2262,11 @@ public sealed class Tf2SourcePlayerState
 
     public bool EnableClientCommandIntent { get; set; } = true;
 
+    public bool EnableHeuristicClientCommandIntent { get; set; }
+
     public IReadOnlyList<Tf2SourceClientCommandHistoryEntry> NativeClientCommandHistory => _nativeClientCommandHistory;
+
+    public IReadOnlyList<Tf2SourceClientSemanticContextEntry> NativeSourceSemanticContextHistory => _nativeSourceSemanticContextHistory;
 
     public int NativeClientCommandHistoryCapacity => OfficialEatf2ServerDllContracts.MaxAdditionalPhysicsSimulationCommands;
 
@@ -2200,6 +2275,8 @@ public sealed class Tf2SourcePlayerState
     private Ps3SourceUserCmd _previousOfficialClientCommand;
 
     private readonly List<Tf2SourceClientCommandHistoryEntry> _nativeClientCommandHistory = new();
+
+    private readonly List<Tf2SourceClientSemanticContextEntry> _nativeSourceSemanticContextHistory = new();
 
     private readonly Dictionary<string, string> _lastClientSetConVars = new(StringComparer.OrdinalIgnoreCase);
 
@@ -2253,6 +2330,7 @@ public sealed class Tf2SourcePlayerState
         LastClientSourcePayloadObjectFragmentTotalCount = clientPayload.PayloadObjectFragmentTotalCount;
         LastClientSourcePayloadObjectFragmentPacketCounter = clientPayload.PayloadObjectFragmentPacketCounter;
         LastClientSourcePayloadObjectFragmentWrappedOrCompressed = clientPayload.PayloadObjectFragmentWrappedOrCompressed;
+        ApplyNativeSourceTransportControlContext(clientPayload);
         ApplyDecodedClientNetMessage(clientPayload, body);
         ApplyClientCommandIntent(clientPayload, body);
     }
@@ -2260,6 +2338,8 @@ public sealed class Tf2SourcePlayerState
     public void AdvanceSnapshot(int snapshotFrameIndex)
     {
         TickBase = checked((uint)Math.Max(snapshotFrameIndex, 0));
+        LastPhysicsSimulationTick = TickBase;
+        PhysicsSimulateTickGate = checked(TickBase + (uint)OfficialEatf2ServerDllContracts.PhysicsSimulateTickGateOffset);
         SimulationTime = TickBase / 30.0f;
         ExpireTimedConditions();
         TryGeneratedRespawn();
@@ -2272,6 +2352,9 @@ public sealed class Tf2SourcePlayerState
     {
         GeneratedRespawnDelaySeconds = world.DisableRespawnTimes ? 0.5f : 5.0f;
         GravityScale = PersonalGravityScale ?? Math.Clamp(world.Gravity / 800.0f, 0.0f, 4.0f);
+        InSolidMapBrush = 0;
+        ApplyMapBoundsCollision(world);
+        ApplyBrushVolumeRules(world, applyHurtDamage: false);
         if (!Alive)
         {
             UpdateNativeMovementFlags();
@@ -2308,7 +2391,207 @@ public sealed class Tf2SourcePlayerState
 
         VelocityX *= Math.Clamp(Friction, 0.0f, 1.0f);
         VelocityY *= Math.Clamp(Friction, 0.0f, 1.0f);
+        ApplyMapBoundsCollision(world);
+        ApplyBrushVolumeRules(world, applyHurtDamage: true);
         UpdateNativeMovementFlags();
+    }
+
+    private void ApplyMapBoundsCollision(Tf2SourceWorldState world)
+    {
+        if (world.MapBounds is not { } bounds)
+        {
+            return;
+        }
+
+        var clampedX = Math.Clamp(OriginX, bounds.MinX, bounds.MaxX);
+        if (MathF.Abs(clampedX - OriginX) > 0.001f)
+        {
+            OriginX = clampedX;
+            VelocityX = 0;
+        }
+
+        var clampedY = Math.Clamp(OriginY, bounds.MinY, bounds.MaxY);
+        if (MathF.Abs(clampedY - OriginY) > 0.001f)
+        {
+            OriginY = clampedY;
+            VelocityY = 0;
+        }
+
+        var clampedZ = Math.Clamp(OriginZ, bounds.MinZ, bounds.MaxZ);
+        if (MathF.Abs(clampedZ - OriginZ) > 0.001f)
+        {
+            OriginZ = clampedZ;
+            VelocityZ = 0;
+            FallVelocity = 0;
+        }
+
+        GroundZ = Math.Clamp(GroundZ, bounds.MinZ, bounds.MaxZ);
+        if (OriginZ < GroundZ)
+        {
+            OriginZ = GroundZ;
+            VelocityZ = 0;
+            FallVelocity = 0;
+        }
+    }
+
+    private void ApplyBrushVolumeRules(Tf2SourceWorldState world, bool applyHurtDamage)
+    {
+        var eyeZ = OriginZ + MathF.Max(1.0f, ViewOffsetZ * 0.5f);
+        var touched = world.BrushVolumes
+            .Where(static volume => volume.Enabled)
+            .Where(volume => volume.Contains(OriginX, OriginY, OriginZ)
+                || volume.Contains(OriginX, OriginY, eyeZ))
+            .ToArray();
+
+        ResolveSolidBrushCollisions(world, touched);
+
+        var first = touched.FirstOrDefault();
+        LastTouchedMapVolumeClass = first?.ClassName ?? "";
+        LastTouchedMapVolumeTarget = first?.TargetName ?? "";
+        InRespawnRoom = touched.Any(static volume => IsVolumeClass(volume, "func_respawnroom")) ? (byte)1 : (byte)0;
+        InRegenerationVolume = touched.Any(static volume => IsVolumeClass(volume, "func_regenerate")) ? (byte)1 : (byte)0;
+        InNoBuildVolume = touched.Any(static volume => IsVolumeClass(volume, "func_nobuild")) ? (byte)1 : (byte)0;
+        InCaptureArea = touched.Any(static volume => IsVolumeClass(volume, "trigger_capture_area") || IsVolumeClass(volume, "func_capturezone")) ? (byte)1 : (byte)0;
+        var hurtVolumes = touched.Where(static volume => IsVolumeClass(volume, "trigger_hurt")).ToArray();
+        InHurtVolume = hurtVolumes.Length > 0 ? (byte)1 : (byte)0;
+        LastHurtVolumeDamage = 0;
+
+        if (InRespawnRoom != 0 || InRegenerationVolume != 0)
+        {
+            Health = MaxHealth;
+            ApplyClassWeaponDefaults(resetAmmo: true);
+        }
+
+        if (!applyHurtDamage)
+        {
+            return;
+        }
+
+        foreach (var hurt in hurtVolumes)
+        {
+            var damage = DamagePerPhysicsTick(hurt);
+            if (damage == 0)
+            {
+                continue;
+            }
+
+            LastHurtVolumeDamage = Math.Max(LastHurtVolumeDamage, damage);
+            ApplyGeneratedDamage(damage);
+            if (!Alive)
+            {
+                break;
+            }
+        }
+    }
+
+    private void ResolveSolidBrushCollisions(Tf2SourceWorldState world, IReadOnlyList<Tf2MapBrushVolume> touched)
+    {
+        foreach (var volume in touched.Where(IsSolidCollisionVolume))
+        {
+            if (!ResolveAabbPenetration(volume.Bounds))
+            {
+                continue;
+            }
+
+            InSolidMapBrush = 1;
+            ApplyMapBoundsCollision(world);
+        }
+    }
+
+    private bool ResolveAabbPenetration(Tf2MapBounds bounds)
+    {
+        if (OriginX < bounds.MinX || OriginX > bounds.MaxX
+            || OriginY < bounds.MinY || OriginY > bounds.MaxY
+            || OriginZ < bounds.MinZ || OriginZ > bounds.MaxZ)
+        {
+            return false;
+        }
+
+        var pushMinX = MathF.Abs(OriginX - bounds.MinX);
+        var pushMaxX = MathF.Abs(bounds.MaxX - OriginX);
+        var pushMinY = MathF.Abs(OriginY - bounds.MinY);
+        var pushMaxY = MathF.Abs(bounds.MaxY - OriginY);
+        var pushMinZ = MathF.Abs(OriginZ - bounds.MinZ);
+        var pushMaxZ = MathF.Abs(bounds.MaxZ - OriginZ);
+        var minimum = MathF.Min(
+            MathF.Min(MathF.Min(pushMinX, pushMaxX), MathF.Min(pushMinY, pushMaxY)),
+            MathF.Min(pushMinZ, pushMaxZ));
+        const float epsilon = 0.03125f;
+
+        if (minimum == pushMinX)
+        {
+            OriginX = bounds.MinX - epsilon;
+            VelocityX = Math.Min(0, VelocityX);
+            return true;
+        }
+
+        if (minimum == pushMaxX)
+        {
+            OriginX = bounds.MaxX + epsilon;
+            VelocityX = Math.Max(0, VelocityX);
+            return true;
+        }
+
+        if (minimum == pushMinY)
+        {
+            OriginY = bounds.MinY - epsilon;
+            VelocityY = Math.Min(0, VelocityY);
+            return true;
+        }
+
+        if (minimum == pushMaxY)
+        {
+            OriginY = bounds.MaxY + epsilon;
+            VelocityY = Math.Max(0, VelocityY);
+            return true;
+        }
+
+        if (minimum == pushMinZ)
+        {
+            OriginZ = bounds.MinZ - epsilon;
+            VelocityZ = Math.Min(0, VelocityZ);
+            return true;
+        }
+
+        OriginZ = bounds.MaxZ + epsilon;
+        GroundZ = Math.Max(GroundZ, bounds.MaxZ + epsilon);
+        VelocityZ = Math.Max(0, VelocityZ);
+        FallVelocity = 0;
+        return true;
+    }
+
+    private bool IsSolidCollisionVolume(Tf2MapBrushVolume volume)
+    {
+        if (!volume.Enabled)
+        {
+            return false;
+        }
+
+        if (IsVolumeClass(volume, "func_respawnroomvisualizer"))
+        {
+            return volume.TeamNumber != 0 && volume.TeamNumber != TeamNumber;
+        }
+
+        return IsVolumeClass(volume, "func_brush") && volume.Solidity == 2
+            || IsVolumeClass(volume, "func_door")
+            || IsVolumeClass(volume, "func_door_rotating")
+            || IsVolumeClass(volume, "func_tracktrain");
+    }
+
+    private static ushort DamagePerPhysicsTick(Tf2MapBrushVolume volume)
+    {
+        var rawDamage = volume.Damage <= 0 ? 1.0f : volume.Damage / 30.0f;
+        if (volume.DamageCap > 0)
+        {
+            rawDamage = MathF.Min(rawDamage, volume.DamageCap);
+        }
+
+        return checked((ushort)Math.Clamp(MathF.Ceiling(rawDamage), 0, ushort.MaxValue));
+    }
+
+    private static bool IsVolumeClass(Tf2MapBrushVolume volume, string className)
+    {
+        return string.Equals(volume.ClassName, className, StringComparison.OrdinalIgnoreCase);
     }
 
     public void SetTeam(uint teamNumber)
@@ -2325,6 +2608,7 @@ public sealed class Tf2SourcePlayerState
         Health = resetHealth ? MaxHealth : Math.Min(Health, MaxHealth);
         DisguiseClass = 0;
         DesiredDisguiseClass = 0;
+        ModelIndex = Tf2Ps3SourceCatalog.PlayerModelPrecacheIndexForClass(ClassNumber);
         ApplyClassWeaponDefaults(resetAmmo: resetHealth);
         NoInterpParity++;
         SaveMeParity++;
@@ -2785,8 +3069,8 @@ public sealed class Tf2SourcePlayerState
         WeaponBuildState = 0;
         WeaponObjectBeingBuiltHandle = 0;
         TfWeaponState = 0;
-        WeaponViewModelIndex = checked(100U + ClassNumber);
-        WeaponWorldModelIndex = checked(200U + ClassNumber);
+        WeaponViewModelIndex = Tf2Ps3SourceCatalog.WeaponViewModelPrecacheIndexForClass(ClassNumber);
+        WeaponWorldModelIndex = Tf2Ps3SourceCatalog.WeaponWorldModelPrecacheIndexForClass(ClassNumber);
         PrimaryAmmoType = ClassNumber switch
         {
             5 or 8 => 0,
@@ -3112,7 +3396,7 @@ public sealed class Tf2SourcePlayerState
         var actionText = actions.Count == 0 ? "idle" : string.Join('+', actions);
         eventText = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"CBasePlayer::ProcessUsercmds CBasePlayer::PhysicsSimulate ClientCommand packet={LastClientSourcePacketCount} seq={LastClientSourceSequence} action={actionText} buttons=0x{LastClientCommandButtons:x2} move=({LastClientCommandForwardMove},{LastClientCommandSideMove},{LastClientCommandUpMove}) yaw={Yaw:0.##} pitch={Pitch:0.##} weaponHint={LastClientCommandWeaponSlotHint} team={TeamNumber} class={ClassNumber} flags=0x{Flags:x} ground=0x{GroundEntityHandle:x} officialMaxUserCmds={OfficialEatf2ServerDllContracts.MaxUserCmdsPerBatch} cusercmdStride=0x{OfficialEatf2ServerDllContracts.CUserCmdStrideBytes:x} decode=0x{OfficialEatf2ServerDllContracts.UserCmdDecodeFunction:x} processSlot=0x{OfficialEatf2ServerDllContracts.PlayerProcessUsercmdsVtableSlot:x} physicsSlot=0x{OfficialEatf2ServerDllContracts.PlayerRunCommandVtableSlot:x} physicsHistoryStride=0x{OfficialEatf2ServerDllContracts.PhysicsCommandHistoryStrideBytes:x}");
+            $"CBasePlayer::ProcessUsercmds CBasePlayer::PhysicsSimulate ClientCommand packet={LastClientSourcePacketCount} seq={LastClientSourceSequence} action={actionText} buttons=0x{LastClientCommandButtons:x2} move=({LastClientCommandForwardMove},{LastClientCommandSideMove},{LastClientCommandUpMove}) yaw={Yaw:0.##} pitch={Pitch:0.##} weaponHint={LastClientCommandWeaponSlotHint} team={TeamNumber} class={ClassNumber} flags=0x{Flags:x} ground=0x{GroundEntityHandle:x} officialMaxUserCmds={OfficialEatf2ServerDllContracts.MaxUserCmdsPerBatch} cusercmdStride=0x{OfficialEatf2ServerDllContracts.CUserCmdStrideBytes:x} decode=0x{OfficialEatf2ServerDllContracts.UserCmdDecodeFunction:x} processSlot=0x{OfficialEatf2ServerDllContracts.PlayerProcessUsercmdsVtableSlot:x} physicsSlot=0x{OfficialEatf2ServerDllContracts.PlayerRunCommandVtableSlot:x} physicsHistoryStride=0x{OfficialEatf2ServerDllContracts.PhysicsCommandHistoryStrideBytes:x} physicsTickGateOffset=0x{OfficialEatf2ServerDllContracts.PhysicsSimulateTickGateOffset:x} LastPhysicsSimulationTick={LastPhysicsSimulationTick} PhysicsSimulateTickGate={PhysicsSimulateTickGate}");
         return true;
     }
 
@@ -3340,6 +3624,7 @@ public sealed class Tf2SourcePlayerState
         LastClientDecodedNetMessagePayloadOffset = decoded.PayloadOffset;
         LastClientDecodedNetMessagePayloadLength = decoded.PayloadLength;
         LastClientDecodedNetMessagePayloadBitCount = decoded.PayloadBitCount;
+        ApplyNativeSourceClientNetMessageContext(clientPayload, decoded);
 
         switch (decoded.Message)
         {
@@ -3453,17 +3738,33 @@ public sealed class Tf2SourcePlayerState
             return;
         }
 
-        LastClientCommandDecoded = Ps3SourceClientCommandIntent.TryDecode(clientPayload, body, out var command);
+        if (!EnableHeuristicClientCommandIntent)
+        {
+            LastClientCommandDecoded = false;
+            return;
+        }
+
+        LastClientCommandDecoded = Ps3SourceClientCommandIntent.TryDecode(
+            clientPayload,
+            body,
+            out var command,
+            allowMarkerlessAssociatedObject: EnableHeuristicClientCommandIntent
+                && !IsAssociatedSlot90ResetCandidate(clientPayload));
         if (!LastClientCommandDecoded)
         {
             return;
         }
 
-        ApplyDecodedClientCommand(clientPayload, command);
+        ApplyDecodedClientCommand(clientPayload, command, isHeuristic: true);
     }
 
     private bool TryApplyOfficialClientCommand(Ps3SourceClientPayloadInfo clientPayload, ReadOnlySpan<byte> body)
     {
+        if (IsAssociatedSlot90ResetCandidate(clientPayload))
+        {
+            return false;
+        }
+
         if (TryApplyOfficialClcMoveClientCommands(clientPayload, body))
         {
             return true;
@@ -3498,12 +3799,19 @@ public sealed class Tf2SourcePlayerState
         }
 
         var move = boundary.Move;
-        var batch = boundary.Batch;
+        if (!move.TryDecodeUserCmdBatch(_previousOfficialClientCommand, out var batch)
+            || batch.ConsumedBits != move.CommandDataBitCount)
+        {
+            return false;
+        }
+
         var commandCount = Math.Min(move.NewCommands, batch.Commands.Count);
         if (commandCount <= 0)
         {
             return false;
         }
+
+        ApplyNativeSourceClcMoveBoundaryContext(clientPayload, boundary, commandCount);
 
         // Source stores the most recent new command at index 0, then runs new
         // commands backward so simulation advances oldest-to-newest.
@@ -3543,13 +3851,17 @@ public sealed class Tf2SourcePlayerState
             checked((byte)Math.Clamp((int)ClassNumber, 0, byte.MaxValue)));
     }
 
-    private void ApplyDecodedClientCommand(Ps3SourceClientPayloadInfo clientPayload, Ps3SourceClientCommandIntent command)
+    private void ApplyDecodedClientCommand(
+        Ps3SourceClientPayloadInfo clientPayload,
+        Ps3SourceClientCommandIntent command,
+        bool isHeuristic = false)
     {
         LastClientCommandForwardMove = MovementFrozen ? (short)0 : command.ForwardMove;
         LastClientCommandSideMove = MovementFrozen ? (short)0 : command.SideMove;
         LastClientCommandUpMove = MovementFrozen ? (short)0 : command.UpMove;
         LastClientCommandButtons = command.Buttons;
         LastClientCommandWeaponSlotHint = command.WeaponSlotHint;
+        ApplyNativeSourceClientCommandContext(clientPayload, command, isHeuristic);
         RecordNativeClientCommand(clientPayload, command);
 
         Yaw = NormalizeAngle(Yaw + command.YawDelta);
@@ -3668,12 +3980,127 @@ public sealed class Tf2SourcePlayerState
             command.TeamHint,
             command.ClassHint,
             OfficialEatf2ServerDllContracts.CUserCmdStrideBytes,
-            OfficialEatf2ServerDllContracts.PhysicsCommandHistoryStrideBytes));
+            OfficialEatf2ServerDllContracts.PhysicsCommandHistoryStrideBytes,
+            LastPhysicsSimulationTick,
+            PhysicsSimulateTickGate));
 
         var capacity = NativeClientCommandHistoryCapacity;
         if (_nativeClientCommandHistory.Count > capacity)
         {
             _nativeClientCommandHistory.RemoveRange(0, _nativeClientCommandHistory.Count - capacity);
+        }
+    }
+
+    private void ApplyNativeSourceTransportControlContext(Ps3SourceClientPayloadInfo clientPayload)
+    {
+        if (IsAssociatedSlot90ResetCandidate(clientPayload))
+        {
+            RecordNativeSourceSemanticContext(
+                clientPayload,
+                "associated-slot90-reset",
+                $"tfelf=008be1e8->008b9ad8->00a58418 reset=+0x44 zeroState=+0xac token=0x{clientPayload.PayloadObjectAssociatedToken.GetValueOrDefault():x8} bodyIgnoredByClientPath=true");
+        }
+
+        switch (clientPayload.Role)
+        {
+            case Ps3SourceClientPayloadRole.InitialHandoffProbe:
+            case Ps3SourceClientPayloadRole.ReliableAssociationProbe:
+            case Ps3SourceClientPayloadRole.AttachedPlayerControlFrame:
+            case Ps3SourceClientPayloadRole.ShortControlAck:
+            case Ps3SourceClientPayloadRole.SetupControlPayload:
+            case Ps3SourceClientPayloadRole.EmbeddedObjectNotice:
+                RecordNativeSourceSemanticContext(
+                    clientPayload,
+                    "transport-control",
+                    $"role={clientPayload.Role} semantic={clientPayload.PayloadSemanticRole} reliableType={clientPayload.ReliableAssociationMessageType?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a"} attachedKind={clientPayload.AttachedFrameKind?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a"}");
+                break;
+        }
+    }
+
+    private static bool IsAssociatedSlot90ResetCandidate(Ps3SourceClientPayloadInfo clientPayload)
+    {
+        return clientPayload.PayloadObjectFrameKind == nameof(Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken)
+            && clientPayload.AttachedFrameKind is null
+            && clientPayload.BitSidecarOffset is null
+            && clientPayload.Role is Ps3SourceClientPayloadRole.UserCommandCandidate
+                or Ps3SourceClientPayloadRole.BinaryControlPayload;
+    }
+
+    private void ApplyNativeSourceClientNetMessageContext(
+        Ps3SourceClientPayloadInfo clientPayload,
+        Ps3SourceDecodedClientNetMessage decoded)
+    {
+        RecordNativeSourceSemanticContext(
+            clientPayload,
+            "source-netmessage",
+            $"message={decoded.MessageName} type={decoded.MessageType} payload={decoded.PayloadKind} bits={decoded.PayloadBitCount}");
+    }
+
+    private void ApplyNativeSourceClientCommandContext(
+        Ps3SourceClientPayloadInfo clientPayload,
+        Ps3SourceClientCommandIntent command,
+        bool isHeuristic)
+    {
+        RecordNativeSourceSemanticContext(
+            clientPayload,
+            isHeuristic ? "source-usercmd-heuristic" : "source-usercmd",
+            $"buttons=0x{command.Buttons:x2} move=({command.ForwardMove},{command.SideMove},{command.UpMove}) weaponHint={command.WeaponSlotHint} cusercmdStride=0x{OfficialEatf2ServerDllContracts.CUserCmdStrideBytes:x} physicsHistoryStride=0x{OfficialEatf2ServerDllContracts.PhysicsCommandHistoryStrideBytes:x} LastPhysicsSimulationTick={LastPhysicsSimulationTick} PhysicsSimulateTickGate={PhysicsSimulateTickGate} heuristic={isHeuristic.ToString().ToLowerInvariant()}");
+    }
+
+    private void ApplyNativeSourceClcMoveBoundaryContext(
+        Ps3SourceClientPayloadInfo clientPayload,
+        Ps3SourceNativeToClcMoveBoundary boundary,
+        int commandCount)
+    {
+        var detail =
+            $"boundary={boundary.Kind} offset={boundary.PayloadOffset} bytes={boundary.PayloadLength} bits={boundary.PayloadBitCount} commands={commandCount}";
+        switch (boundary.Kind)
+        {
+            case Ps3SourceNativeToClcMoveBoundaryKind.OwnerSlot8Bitstream:
+                RecordNativeSourceSemanticContext(
+                    clientPayload,
+                    "owner-slot8-control",
+                    $"tfelf=008be1e8->00a55d38->00a52720->008722a0 {detail}");
+                break;
+            case Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderWord6Bitstream:
+            case Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderDeferredPointerWord6Bitstream:
+            case Ps3SourceNativeToClcMoveBoundaryKind.OwnerForwarderConfigFallbackWord4Bitstream:
+                RecordNativeSourceSemanticContext(
+                    clientPayload,
+                    "owner-forward-context",
+                    $"tfelf=008722a0 layout={boundary.Kind} {detail}");
+                break;
+            case Ps3SourceNativeToClcMoveBoundaryKind.PayloadObjectInnerPayload
+                when clientPayload.PayloadObjectFrameKind == nameof(Ps3SourcePayloadObjectFrameKind.AssociatedObjectToken):
+                RecordNativeSourceSemanticContext(
+                    clientPayload,
+                    "associated-slot90",
+                    $"tfelf=008be1e8->008b9ad8->vtable+0x90 token=0x{clientPayload.PayloadObjectAssociatedToken.GetValueOrDefault():x8} {detail}");
+                break;
+        }
+    }
+
+    private void RecordNativeSourceSemanticContext(
+        Ps3SourceClientPayloadInfo clientPayload,
+        string contextKind,
+        string detail)
+    {
+        _nativeSourceSemanticContextHistory.Add(new Tf2SourceClientSemanticContextEntry(
+            LastClientSourcePacketCount,
+            LastClientSourceSequence,
+            SimulationTime,
+            contextKind,
+            detail,
+            clientPayload.Role.ToString(),
+            clientPayload.Shape.ToString(),
+            clientPayload.NativeFrameKind.ToString(),
+            clientPayload.BodyLength,
+            LastClientSourceBodyHash));
+
+        const int capacity = 128;
+        if (_nativeSourceSemanticContextHistory.Count > capacity)
+        {
+            _nativeSourceSemanticContextHistory.RemoveRange(0, _nativeSourceSemanticContextHistory.Count - capacity);
         }
     }
 
@@ -3998,7 +4425,21 @@ public readonly record struct Tf2SourceClientCommandHistoryEntry(
     byte TeamHint,
     byte ClassHint,
     int CUserCmdStrideBytes,
-    int PhysicsCommandHistoryStrideBytes);
+    int PhysicsCommandHistoryStrideBytes,
+    uint LastPhysicsSimulationTick,
+    uint PhysicsSimulateTickGate);
+
+public readonly record struct Tf2SourceClientSemanticContextEntry(
+    int PacketCount,
+    ushort Sequence,
+    float SimulationTime,
+    string ContextKind,
+    string Detail,
+    string PayloadRole,
+    string PayloadShape,
+    string NativeFrameKind,
+    int BodyLength,
+    uint BodyHash);
 
 public sealed class Tf2SourceWorldState
 {
@@ -4082,6 +4523,8 @@ public sealed class Tf2SourceWorldState
     public List<Tf2ObjectivePointState> ControlPoints { get; } = [];
 
     public List<Tf2FlagState> Flags { get; } = [];
+
+    public IReadOnlyList<Tf2MapBrushVolume> BrushVolumes => _mapMetadata?.BrushVolumes ?? [];
 
     public void ApplyMapDefaults(
         string mapName,

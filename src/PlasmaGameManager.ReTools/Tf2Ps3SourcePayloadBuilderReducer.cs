@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -21,6 +22,14 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
         @"(?<writer>FUN_00870c28|FUN_0086c9d8|FUN_0086caf8|FUN_0086c7e8|FUN_0086d918)\s*\((?<args>.*?)\)\s*;",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
+    private static readonly Regex FormatterCallRegex = new(
+        @"FUN_008708f8\s*\((?<args>.*?)\)\s*;",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex KeyValueAppendCallRegex = new(
+        @"_opd_FUN_0090f970\s*\((?<args>.*?)\)\s*;",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
@@ -36,25 +45,33 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
             ["FUN_0086d918"] = new("write-stringz-u8", null, "Writes each byte with write-u8 until and including the NUL terminator.")
         };
 
-    public static async Task ReduceAsync(string cExportPath, string outputPath)
+    public static async Task ReduceAsync(string cExportPath, string outputPath, string? elfPath = null)
     {
         var lines = await File.ReadAllLinesAsync(cExportPath);
+        var resolver = elfPath is not null && File.Exists(elfPath)
+            ? new Tf2Ps3ElfStringResolver(await File.ReadAllBytesAsync(elfPath))
+            : null;
         var functions = ExtractFunctions(lines);
         var callsiteFunctions = functions
             .Where(static function => function.Body.Contains("_opd_FUN_008bc978(", StringComparison.Ordinal))
-            .Select(BuildPayloadBuilderFunction)
+            .Select(function => BuildPayloadBuilderFunction(function, resolver))
             .ToArray();
 
         var report = new Tf2Ps3SourcePayloadBuilderReport(
             "tf2ps3-source-payload-builder-map",
             "Extracts every TF.elf caller of the native Source/gameplay send builder at 008bc978 and reduces the bitstream writer calls into packet schemas. These are Source-side PS3 payload builders, not Plasma/GameManager text packets.",
             cExportPath,
+            elfPath,
             new Tf2Ps3SourcePayloadBuilderSummary(
                 callsiteFunctions.Length,
                 callsiteFunctions.Count(static function => function.PayloadBuilderCallsites.Count > 0),
                 callsiteFunctions.Sum(static function => function.PayloadBuilderCallsites.Count),
                 callsiteFunctions.Count(static function => function.SchemaMessageId is not null),
                 callsiteFunctions.Count(static function => function.Writes.Count > 0),
+                callsiteFunctions.Count(static function => function.FormatterCalls.Count > 0),
+                callsiteFunctions.Sum(static function => function.FormatterCalls.Count),
+                callsiteFunctions.Count(static function => function.KeyValueAppends.Count > 0),
+                callsiteFunctions.Sum(static function => function.KeyValueAppends.Count),
                 callsiteFunctions.Count(static function => function.UsesBitPayloadSidecar),
                 callsiteFunctions.Count(static function => function.UsesFragmentOrCompressionGate)),
             WriterHelpers.Values.ToArray(),
@@ -73,8 +90,11 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
         await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, JsonOptions));
     }
 
-    private static Tf2Ps3SourcePayloadBuilderFunction BuildPayloadBuilderFunction(ExportedFunction function)
+    private static Tf2Ps3SourcePayloadBuilderFunction BuildPayloadBuilderFunction(
+        ExportedFunction function,
+        Tf2Ps3ElfStringResolver? resolver)
     {
+        var tocBase = resolver?.FindTocBase(function.Address);
         var bufferInitializers = BufferInitRegex.Matches(function.Body)
             .Select(match =>
             {
@@ -98,6 +118,18 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
             .Select((args, index) => BuildCallsite(index, args))
             .ToArray();
 
+        var formatterCalls = FormatterCallRegex.Matches(function.Body)
+            .Select((match, index) => BuildFormatterCall(index, match, tocBase, resolver))
+            .Where(static call => call is not null)
+            .Cast<Tf2Ps3SourceFormatterCall>()
+            .ToArray();
+
+        var keyValueAppends = KeyValueAppendCallRegex.Matches(function.Body)
+            .Select((match, index) => BuildKeyValueAppend(index, match, tocBase, resolver))
+            .Where(static call => call is not null)
+            .Cast<Tf2Ps3SourceKeyValueAppendCall>()
+            .ToArray();
+
         var schemaBuffer = callsites
             .Select(static callsite => NormalizeBufferExpression(callsite.PayloadExpression))
             .FirstOrDefault(buffer => buffer.Length > 0 && writes.Any(write => write.Buffer == buffer));
@@ -114,15 +146,18 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
             function.Address,
             function.StartLine,
             function.EndLine,
+            FormatAddress(tocBase),
             schemaName,
             schemaMessageId,
             schemaBuffer,
             bufferInitializers,
             writes,
+            formatterCalls,
+            keyValueAppends,
             callsites,
             callsites.Any(static callsite => callsite.BitPayloadExpression is not "0" and not ""),
             callsites.Any(static callsite => callsite.WrapOrCompressionFlagExpression is not "0" and not ""),
-            BuildConclusion(schemaName, schemaMessageId, schemaWrites, callsites),
+            BuildConclusion(schemaName, schemaMessageId, schemaWrites, formatterCalls, keyValueAppends, callsites),
             Preview(function.Lines));
     }
 
@@ -175,6 +210,72 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
             ClassifyLengthExpression(CleanExpression(args.ElementAtOrDefault(4) ?? "")));
     }
 
+    private static Tf2Ps3SourceFormatterCall? BuildFormatterCall(
+        int index,
+        Match match,
+        uint? tocBase,
+        Tf2Ps3ElfStringResolver? resolver)
+    {
+        var args = SplitTopLevelArguments(match.Groups["args"].Value);
+        if (args.Count < 3)
+        {
+            return null;
+        }
+
+        var destination = CleanExpression(args[0]);
+        var capacity = CleanExpression(args.ElementAtOrDefault(1) ?? "");
+        var format = CleanExpression(args.ElementAtOrDefault(2) ?? "");
+        var values = args.Skip(3).Select(CleanExpression).Where(static value => value.Length > 0).ToArray();
+        var resolvedFormat = resolver?.ResolveStringPointer(format, tocBase);
+
+        return new Tf2Ps3SourceFormatterCall(
+            index,
+            destination,
+            capacity,
+            format,
+            values,
+            NormalizeBufferExpression(destination),
+            FormatAddress(resolvedFormat?.PointerAddress),
+            FormatAddress(resolvedFormat?.StringAddress),
+            resolvedFormat?.Value,
+            ClassifyFormatterRole(capacity, format, values));
+    }
+
+    private static Tf2Ps3SourceKeyValueAppendCall? BuildKeyValueAppend(
+        int index,
+        Match match,
+        uint? tocBase,
+        Tf2Ps3ElfStringResolver? resolver)
+    {
+        var args = SplitTopLevelArguments(match.Groups["args"].Value);
+        if (args.Count < 4)
+        {
+            return null;
+        }
+
+        var destination = CleanExpression(args[0]);
+        var key = CleanExpression(args.ElementAtOrDefault(1) ?? "");
+        var value = CleanExpression(args.ElementAtOrDefault(2) ?? "");
+        var capacity = CleanExpression(args.ElementAtOrDefault(3) ?? "");
+        var resolvedKey = resolver?.ResolveStringPointer(key, tocBase);
+        var resolvedValue = resolver?.ResolveStringPointer(value, tocBase);
+
+        return new Tf2Ps3SourceKeyValueAppendCall(
+            index,
+            destination,
+            key,
+            value,
+            capacity,
+            FormatAddress(resolvedKey?.PointerAddress),
+            FormatAddress(resolvedKey?.StringAddress),
+            resolvedKey?.Value,
+            FormatAddress(resolvedValue?.PointerAddress),
+            FormatAddress(resolvedValue?.StringAddress),
+            resolvedValue?.Value,
+            ClassifyKeyExpression(key),
+            ClassifyValueExpression(value));
+    }
+
     private static string ClassifySchema(
         string address,
         string? messageId,
@@ -199,6 +300,8 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
         string schemaName,
         string? messageId,
         IReadOnlyList<Tf2Ps3SourcePayloadWrite> writes,
+        IReadOnlyList<Tf2Ps3SourceFormatterCall> formatterCalls,
+        IReadOnlyList<Tf2Ps3SourceKeyValueAppendCall> keyValueAppends,
         IReadOnlyList<Tf2Ps3SourcePayloadBuilderCallsite> callsites)
     {
         if (messageId is "0x44" or "0x45" or "0x49")
@@ -211,12 +314,102 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
             return "This is the Source gameplay snapshot path. It sends the already-built bitstream and may ask 008bc978 to wrap/compress the direct payload.";
         }
 
+        if (formatterCalls.Any(static call => call.Role == "entity-health-delta-formatter"))
+        {
+            return "Native raw payload is a tiny formatted entity-health delta. It uses the TF.elf formatter before sending through 008bc978.";
+        }
+
+        if (keyValueAppends.Count > 0)
+        {
+            return "Native raw payload is assembled as filtered key/value text and then formatted before 008bc978; generate the semantic keys, not captured bytes.";
+        }
+
         if (writes.Count == 0 && callsites.Count > 0)
         {
             return "The payload buffer is prepared by earlier code or a formatter; inspect the payload expression and caller object state before generating this family.";
         }
 
         return "Field order is captured from TF.elf writer calls; unknown expressions still need naming from surrounding class/function context.";
+    }
+
+    private static string ClassifyFormatterRole(
+        string capacity,
+        string format,
+        IReadOnlyList<string> values)
+    {
+        if (format.Contains("PTR_s_m_iHealth", StringComparison.Ordinal))
+        {
+            return "entity-health-delta-formatter";
+        }
+
+        if (capacity is "0x805" or "0x800" || values.Any(static value => value.Contains("uVar3 - 0x86a", StringComparison.Ordinal)))
+        {
+            return "player-status-keyvalue-frame-formatter";
+        }
+
+        if (format.Contains("PTR_s_", StringComparison.Ordinal) || format.Contains("DAT_", StringComparison.Ordinal))
+        {
+            return "native-symbol-format-string";
+        }
+
+        return "generic-native-formatter";
+    }
+
+    private static string ClassifyKeyExpression(string expression)
+    {
+        if (expression.Contains("PTR_s_m_iPing", StringComparison.Ordinal))
+        {
+            return "player-ping-key";
+        }
+
+        if (expression.Contains("PTR_s_m_iHealth", StringComparison.Ordinal))
+        {
+            return "player-health-key";
+        }
+
+        if (expression.Contains("PTR_s_m_iPlayerRating", StringComparison.Ordinal))
+        {
+            return "player-rating-key";
+        }
+
+        if (expression.Contains("PTR_s_m_iRatingDelta", StringComparison.Ordinal))
+        {
+            return "player-rating-delta-key";
+        }
+
+        if (expression.Contains("iStack_", StringComparison.Ordinal))
+        {
+            return "toc-resolved-source-status-key";
+        }
+
+        return "unresolved-key-expression";
+    }
+
+    private static string ClassifyValueExpression(string expression)
+    {
+        if (expression.Contains("FUN_0086f2b8", StringComparison.Ordinal))
+        {
+            return "formatted-numeric-value";
+        }
+
+        if (expression.Contains("uVar16", StringComparison.Ordinal)
+            || expression.Contains("uVar5", StringComparison.Ordinal)
+            || expression.Contains("uVar1", StringComparison.Ordinal))
+        {
+            return "runtime-player-or-team-value";
+        }
+
+        if (expression.Contains("uVar3 - 0x970", StringComparison.Ordinal))
+        {
+            return "formatted-local-text-value";
+        }
+
+        if (expression.Contains("0x", StringComparison.Ordinal))
+        {
+            return "constant-or-toc-string";
+        }
+
+        return "unresolved-value-expression";
     }
 
     private static string ClassifyField(string expression, string kind)
@@ -374,6 +567,11 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
         return Regex.Replace(expression, @"\s+", " ").Trim();
     }
 
+    private static string? FormatAddress(uint? address)
+    {
+        return address is null ? null : $"0x{address.Value:x8}";
+    }
+
     private static IReadOnlyList<ExportedFunction> ExtractFunctions(string[] lines)
     {
         var functions = new List<ExportedFunction>();
@@ -502,12 +700,141 @@ public static class Tf2Ps3SourcePayloadBuilderReducer
         int EndLine,
         string[] Lines,
         string Body);
+
+    private sealed class Tf2Ps3ElfStringResolver(byte[] image)
+    {
+        private static readonly Regex TocRelativePointerRegex = new(
+            @"\*\(uint \*\)\([^)]*iStack_[A-Za-z0-9_]+\s*\+\s*-0x(?<offset>[0-9a-fA-F]+)\)",
+            RegexOptions.Compiled);
+
+        private static readonly Regex NamedPointerRegex = new(
+            @"PTR_[A-Za-z0-9_\[\]]+_(?<address>[0-9a-fA-F]{8})",
+            RegexOptions.Compiled);
+
+        private readonly Dictionary<string, uint?> tocBaseByEntry = new(StringComparer.Ordinal);
+
+        public uint? FindTocBase(string entryAddress)
+        {
+            if (tocBaseByEntry.TryGetValue(entryAddress, out var cached))
+            {
+                return cached;
+            }
+
+            if (!uint.TryParse(entryAddress, System.Globalization.NumberStyles.HexNumber, null, out var entry))
+            {
+                tocBaseByEntry[entryAddress] = null;
+                return null;
+            }
+
+            var needle = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(needle, entry);
+            for (var i = 0; i <= image.Length - 8; i += 4)
+            {
+                if (!image.AsSpan(i, 4).SequenceEqual(needle))
+                {
+                    continue;
+                }
+
+                var toc = BinaryPrimitives.ReadUInt32BigEndian(image.AsSpan(i + 4, 4));
+                if (VirtualToFileOffset(toc) is not null)
+                {
+                    tocBaseByEntry[entryAddress] = toc;
+                    return toc;
+                }
+            }
+
+            tocBaseByEntry[entryAddress] = null;
+            return null;
+        }
+
+        public ResolvedStringPointer? ResolveStringPointer(string expression, uint? tocBase)
+        {
+            var pointerAddress = ResolvePointerAddress(expression, tocBase);
+            if (pointerAddress is null)
+            {
+                return null;
+            }
+
+            var stringAddress = ReadUInt32(pointerAddress.Value);
+            var value = stringAddress is null ? null : ReadAsciiString(stringAddress.Value);
+            return new ResolvedStringPointer(pointerAddress.Value, stringAddress, value);
+        }
+
+        private static uint? ResolvePointerAddress(string expression, uint? tocBase)
+        {
+            var tocMatch = TocRelativePointerRegex.Match(expression);
+            if (tocMatch.Success && tocBase is not null)
+            {
+                var offset = Convert.ToUInt32(tocMatch.Groups["offset"].Value, 16);
+                return tocBase.Value - offset;
+            }
+
+            var namedMatch = NamedPointerRegex.Match(expression);
+            if (namedMatch.Success)
+            {
+                return Convert.ToUInt32(namedMatch.Groups["address"].Value, 16);
+            }
+
+            return null;
+        }
+
+        private uint? ReadUInt32(uint virtualAddress)
+        {
+            var offset = VirtualToFileOffset(virtualAddress);
+            if (offset is null || offset.Value < 0 || offset.Value + 4 > image.Length)
+            {
+                return null;
+            }
+
+            return BinaryPrimitives.ReadUInt32BigEndian(image.AsSpan((int)offset.Value, 4));
+        }
+
+        private string? ReadAsciiString(uint virtualAddress)
+        {
+            var offset = VirtualToFileOffset(virtualAddress);
+            if (offset is null || offset.Value < 0 || offset.Value >= image.Length)
+            {
+                return null;
+            }
+
+            var start = (int)offset.Value;
+            var end = start;
+            var maxEnd = Math.Min(image.Length, start + 128);
+            while (end < maxEnd && image[end] != 0)
+            {
+                if ((image[end] < 0x20 && image[end] is not (byte)'\t' and not (byte)'\n' and not (byte)'\r')
+                    || image[end] > 0x7e)
+                {
+                    return null;
+                }
+
+                end++;
+            }
+
+            return end == start ? null : System.Text.Encoding.ASCII.GetString(image, start, end - start);
+        }
+
+        private static long? VirtualToFileOffset(uint virtualAddress)
+        {
+            return virtualAddress switch
+            {
+                >= 0x00010000 and < 0x0176bb30 => virtualAddress - 0x00010000,
+                >= 0x01770000 and < 0x019c4318 => virtualAddress - 0x00010000,
+                >= 0x10000000 and < 0x100e95c8 => virtualAddress - 0x10000000 + 0x019c0000,
+                >= 0x100f0000 and < 0x10175c10 => virtualAddress - 0x100f0000 + 0x01ab0000,
+                _ => null
+            };
+        }
+    }
+
+    private sealed record ResolvedStringPointer(uint PointerAddress, uint? StringAddress, string? Value);
 }
 
 public sealed record Tf2Ps3SourcePayloadBuilderReport(
     string Status,
     string Note,
     string Input,
+    string? ElfInput,
     Tf2Ps3SourcePayloadBuilderSummary Summary,
     IReadOnlyList<WriterHelperInfo> WriterHelpers,
     IReadOnlyList<Tf2Ps3SourcePayloadAnchor> Anchors,
@@ -519,6 +846,10 @@ public sealed record Tf2Ps3SourcePayloadBuilderSummary(
     int PayloadBuilderCallsiteCount,
     int FunctionsWithSchemaMessageId,
     int FunctionsWithWriterCalls,
+    int FunctionsWithFormatterCalls,
+    int FormatterCallCount,
+    int FunctionsWithKeyValueAppends,
+    int KeyValueAppendCount,
     int FunctionsUsingBitPayloadSidecar,
     int FunctionsUsingFragmentOrCompressionGate);
 
@@ -531,11 +862,14 @@ public sealed record Tf2Ps3SourcePayloadBuilderFunction(
     string Address,
     int StartLine,
     int EndLine,
+    string? TocBase,
     string SchemaName,
     string? SchemaMessageId,
     string? SchemaBuffer,
     IReadOnlyList<Tf2Ps3SourceBufferInitializer> BufferInitializers,
     IReadOnlyList<Tf2Ps3SourcePayloadWrite> Writes,
+    IReadOnlyList<Tf2Ps3SourceFormatterCall> FormatterCalls,
+    IReadOnlyList<Tf2Ps3SourceKeyValueAppendCall> KeyValueAppends,
     IReadOnlyList<Tf2Ps3SourcePayloadBuilderCallsite> PayloadBuilderCallsites,
     bool UsesBitPayloadSidecar,
     bool UsesFragmentOrCompressionGate,
@@ -557,6 +891,33 @@ public sealed record Tf2Ps3SourcePayloadWrite(
     string Buffer,
     string ValueExpression,
     string FieldRole);
+
+public sealed record Tf2Ps3SourceFormatterCall(
+    int Index,
+    string DestinationExpression,
+    string CapacityExpression,
+    string FormatExpression,
+    IReadOnlyList<string> ValueExpressions,
+    string NormalizedDestinationBuffer,
+    string? FormatPointerAddress,
+    string? FormatStringAddress,
+    string? ResolvedFormatString,
+    string Role);
+
+public sealed record Tf2Ps3SourceKeyValueAppendCall(
+    int Index,
+    string DestinationExpression,
+    string KeyExpression,
+    string ValueExpression,
+    string CapacityExpression,
+    string? KeyPointerAddress,
+    string? KeyStringAddress,
+    string? ResolvedKeyString,
+    string? ValuePointerAddress,
+    string? ValueStringAddress,
+    string? ResolvedValueString,
+    string KeyRole,
+    string ValueRole);
 
 public sealed record Tf2Ps3SourcePayloadBuilderCallsite(
     int Index,
